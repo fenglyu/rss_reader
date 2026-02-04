@@ -168,12 +168,11 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
 
     println!("Found {} feeds in OPML file", feed_urls.len());
 
-    let mut added = 0;
+    // First pass: filter out existing feeds and create new feed entries
+    let mut feeds_to_fetch = Vec::new();
     let mut skipped = 0;
-    let mut errors = 0;
 
     for (title, url) in feed_urls {
-        // Check if feed already exists
         if ctx.store.get_feed_by_url(&url)?.is_some() {
             skipped += 1;
             continue;
@@ -183,41 +182,45 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
         let feed = Feed::new(url.clone());
         let feed_id = ctx.store.add_feed(&feed)?;
 
-        // Try to fetch the feed
-        match ctx.fetcher.fetch(&url, None, None).await {
-            Ok(FetchResult::Content {
-                body,
-                etag,
-                last_modified,
-            }) => {
-                match ctx.normalizer.normalize(feed_id, &url, &body) {
-                    Ok((meta, items)) => {
-                        let update = FeedUpdate {
-                            title: meta.title.or_else(|| Some(title.clone())),
-                            description: meta.description,
-                            etag,
-                            last_modified,
-                            last_fetched_at: Some(Utc::now()),
-                        };
-                        ctx.store.update_feed(feed_id, &update)?;
-                        let count = ctx.store.add_items(&items)?;
-                        println!("  + {} ({} items)", title, count);
-                        added += 1;
-                    }
-                    Err(e) => {
-                        eprintln!("  ! {} - parse error: {}", title, e);
-                        ctx.store.delete_feed(feed_id)?;
-                        errors += 1;
-                    }
-                }
-            }
-            Ok(FetchResult::NotModified) => {
-                println!("  + {} (not modified)", title);
+        // Store with OPML title as fallback
+        let mut feed_with_id = feed;
+        feed_with_id.id = feed_id;
+        feed_with_id.title = Some(title);
+        feeds_to_fetch.push(feed_with_id);
+    }
+
+    if feeds_to_fetch.is_empty() {
+        println!("All feeds already exist ({} skipped)", skipped);
+        return Ok(());
+    }
+
+    println!("Fetching {} new feeds in parallel...", feeds_to_fetch.len());
+
+    // Parallel fetch all new feeds
+    let results = ctx
+        .parallel_fetcher
+        .fetch_all(feeds_to_fetch.clone(), ctx.store.clone(), &ctx.normalizer)
+        .await;
+
+    let mut added = 0;
+    let mut errors = 0;
+
+    for (feed_id, result) in results {
+        let feed = feeds_to_fetch.iter().find(|f| f.id == feed_id);
+        let title = feed
+            .and_then(|f| f.title.as_ref())
+            .map(|s| s.as_str())
+            .unwrap_or("Unknown");
+
+        match result {
+            Ok(count) => {
+                println!("  + {} ({} items)", title, count);
                 added += 1;
             }
             Err(e) => {
-                eprintln!("  ! {} - fetch error: {}", title, e);
-                ctx.store.delete_feed(feed_id)?;
+                eprintln!("  ! {} - error: {}", title, e);
+                // Delete the feed entry on error
+                let _ = ctx.store.delete_feed(feed_id);
                 errors += 1;
             }
         }

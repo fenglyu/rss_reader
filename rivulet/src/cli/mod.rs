@@ -2,10 +2,16 @@ pub mod commands;
 
 use clap::{Parser, Subcommand};
 
+use crate::fetcher::parallel::DEFAULT_WORKERS;
+
 #[derive(Parser)]
 #[command(name = "rivulet")]
 #[command(about = "A terminal RSS/Atom reader", long_about = None)]
 pub struct Cli {
+    /// Number of parallel workers for fetching feeds
+    #[arg(short, long, default_value_t = DEFAULT_WORKERS, global = true)]
+    pub workers: usize,
+
     #[command(subcommand)]
     pub command: Commands,
 }

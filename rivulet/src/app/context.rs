@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::app::error::{Result, RivuletError};
 use crate::fetcher::http_fetcher::HttpFetcher;
-use crate::fetcher::parallel::ParallelFetcher;
+use crate::fetcher::parallel::{ParallelFetcher, DEFAULT_WORKERS};
 use crate::fetcher::Fetcher;
 use crate::normalizer::Normalizer;
 use crate::store::sqlite::SqliteStore;
@@ -17,6 +17,10 @@ pub struct AppContext {
 
 impl AppContext {
     pub fn new(db_path: Option<PathBuf>) -> Result<Self> {
+        Self::with_workers(db_path, DEFAULT_WORKERS)
+    }
+
+    pub fn with_workers(db_path: Option<PathBuf>, workers: usize) -> Result<Self> {
         let db_path = match db_path {
             Some(p) => p,
             None => Self::default_db_path()?,
@@ -24,7 +28,7 @@ impl AppContext {
 
         let store = Arc::new(SqliteStore::new(&db_path)?);
         let fetcher: Arc<dyn Fetcher + Send + Sync> = Arc::new(HttpFetcher::new());
-        let parallel_fetcher = ParallelFetcher::new(fetcher.clone());
+        let parallel_fetcher = ParallelFetcher::with_workers(fetcher.clone(), workers);
         let normalizer = Normalizer::new();
 
         Ok(Self {
@@ -36,9 +40,13 @@ impl AppContext {
     }
 
     pub fn in_memory() -> Result<Self> {
+        Self::in_memory_with_workers(DEFAULT_WORKERS)
+    }
+
+    pub fn in_memory_with_workers(workers: usize) -> Result<Self> {
         let store = Arc::new(SqliteStore::in_memory()?);
         let fetcher: Arc<dyn Fetcher + Send + Sync> = Arc::new(HttpFetcher::new());
-        let parallel_fetcher = ParallelFetcher::new(fetcher.clone());
+        let parallel_fetcher = ParallelFetcher::with_workers(fetcher.clone(), workers);
         let normalizer = Normalizer::new();
 
         Ok(Self {

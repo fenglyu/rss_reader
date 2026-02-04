@@ -8,7 +8,7 @@ use crate::fetcher::{FetchResult, Fetcher};
 use crate::normalizer::Normalizer;
 use crate::store::Store;
 
-const MAX_CONCURRENT_FETCHES: usize = 5;
+pub const DEFAULT_WORKERS: usize = 10;
 
 pub struct ParallelFetcher {
     fetcher: Arc<dyn Fetcher + Send + Sync>,
@@ -17,9 +17,13 @@ pub struct ParallelFetcher {
 
 impl ParallelFetcher {
     pub fn new(fetcher: Arc<dyn Fetcher + Send + Sync>) -> Self {
+        Self::with_workers(fetcher, DEFAULT_WORKERS)
+    }
+
+    pub fn with_workers(fetcher: Arc<dyn Fetcher + Send + Sync>, workers: usize) -> Self {
         Self {
             fetcher,
-            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
+            semaphore: Arc::new(Semaphore::new(workers)),
         }
     }
 

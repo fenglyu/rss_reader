@@ -52,7 +52,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>) -> Result<()> {
     load_all_items(&mut tui_app, &ctx)?;
 
     loop {
-        terminal.draw(|frame| layout::render(frame, &tui_app))?;
+        terminal.draw(|frame| layout::render(frame, &mut tui_app))?;
 
         match event_handler.next()? {
             AppEvent::Key(key) => {
@@ -66,6 +66,15 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>) -> Result<()> {
                     }
                     Action::MoveDown => {
                         tui_app.move_down();
+                    }
+                    Action::NextPage => {
+                        tui_app.next_page();
+                    }
+                    Action::PrevPage => {
+                        tui_app.prev_page();
+                    }
+                    Action::ToggleMaximize => {
+                        tui_app.toggle_maximize();
                     }
                     Action::NextPane => {
                         tui_app.active_pane = tui_app.active_pane.next();
@@ -132,7 +141,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>) -> Result<()> {
                     }
                     Action::Refresh => {
                         tui_app.is_refreshing = true;
-                        terminal.draw(|frame| layout::render(frame, &tui_app))?;
+                        terminal.draw(|frame| layout::render(frame, &mut tui_app))?;
 
                         let feeds = ctx.store.get_all_feeds()?;
                         let results = ctx
@@ -174,6 +183,7 @@ fn load_feeds(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     if tui_app.feed_index >= tui_app.feeds.len() && !tui_app.feeds.is_empty() {
         tui_app.feed_index = tui_app.feeds.len() - 1;
     }
+    tui_app.feed_list_state.select(Some(tui_app.feed_index));
     Ok(())
 }
 
@@ -188,6 +198,7 @@ fn load_all_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     if tui_app.item_index >= tui_app.items.len() && !tui_app.items.is_empty() {
         tui_app.item_index = tui_app.items.len() - 1;
     }
+    tui_app.item_list_state.select(Some(tui_app.item_index));
     Ok(())
 }
 
@@ -200,5 +211,6 @@ fn load_items_for_feed(tui_app: &mut TuiApp, ctx: &AppContext, feed_id: i64) -> 
             tui_app.item_states.insert(item.id.clone(), state);
         }
     }
+    tui_app.item_list_state.select(Some(0));
     Ok(())
 }

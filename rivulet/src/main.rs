@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let ctx = AppContext::new(None)?;
+    let ctx = AppContext::with_workers(None, cli.workers)?;
 
     match cli.command {
         Commands::Add { url } => {
