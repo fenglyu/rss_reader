@@ -18,6 +18,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Initialize config file with all options
+    Init {
+        /// Overwrite existing config
+        #[arg(long)]
+        force: bool,
+    },
     /// Add a new feed
     Add {
         /// URL of the feed to add

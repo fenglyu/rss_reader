@@ -24,16 +24,14 @@ Rivulet is a terminal-first, offline-first RSS/Atom feed reader with full-text c
 ```bash
 git clone https://github.com/user/rivulet
 cd rivulet
-cargo build --release
+cargo install --path .
 ```
 
-The binary will be at `./target/release/rivulet`.
-
-### Add to PATH
+Or build manually:
 
 ```bash
-# Add to ~/.bashrc or ~/.zshrc
-export PATH="$PATH:/path/to/rivulet/target/release"
+cargo build --release
+# Binary at ./target/release/rivulet
 ```
 
 ### Requirements
@@ -46,6 +44,9 @@ export PATH="$PATH:/path/to/rivulet/target/release"
 ## Quick Start
 
 ```bash
+# Initialize config file (optional - auto-created on first run)
+rivulet init
+
 # Add your first feed
 rivulet add https://blog.rust-lang.org/feed.xml
 
@@ -251,10 +252,14 @@ See [scraper.md](scraper.md) for detailed configuration.
 
 Configuration file: `~/.config/rivulet/config.toml`
 
-A default config is created on first run. Copy the sample:
+A default config is created on first run, or use the init command:
 
 ```bash
-cp config.sample.toml ~/.config/rivulet/config.toml
+# Create config with all options and comments
+rivulet init
+
+# Overwrite existing config
+rivulet init --force
 ```
 
 ### Colors
@@ -450,6 +455,8 @@ q/Ctrl+c    Quit
 ## Command Reference
 
 ```
+rivulet init                   Initialize config file
+rivulet init --force           Overwrite existing config
 rivulet add <URL>              Add a new feed
 rivulet remove <URL>           Remove a feed
 rivulet import <FILE>          Import OPML file

@@ -11,20 +11,30 @@ A terminal-first, offline-first RSS/Atom feed reader with full-text content scra
 - **OPML Import** - Import feeds from other readers
 - **Configurable** - Customize colors, keybindings, and scraper settings
 
+## Installation
+
+```bash
+# From source
+cargo install --path .
+
+# Or build manually
+cargo build --release
+```
+
 ## Quick Start
 
 ```bash
-# Build
-cargo build --release
+# Initialize config (optional - auto-created on first run)
+rivulet init
 
 # Add a feed
-./target/release/rivulet add https://blog.rust-lang.org/feed.xml
+rivulet add https://blog.rust-lang.org/feed.xml
 
 # Update feeds
-./target/release/rivulet update
+rivulet update
 
 # Launch TUI
-./target/release/rivulet tui
+rivulet tui
 ```
 
 ## Screenshots
@@ -50,6 +60,7 @@ cargo build --release
 ## Commands
 
 ```bash
+rivulet init              # Initialize config file
 rivulet add <URL>         # Add a new feed
 rivulet remove <URL>      # Remove a feed
 rivulet import <FILE>     # Import OPML file

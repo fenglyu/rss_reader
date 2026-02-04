@@ -28,6 +28,10 @@ async fn main() -> anyhow::Result<()> {
     let ctx = AppContext::with_scraper_config(None, cli.workers, Some(config.scraper.clone()))?;
 
     match cli.command {
+        Commands::Init { force } => {
+            commands::init_config(force)?;
+            return Ok(());
+        }
         Commands::Add { url } => {
             commands::add_feed(&ctx, &url).await?;
         }

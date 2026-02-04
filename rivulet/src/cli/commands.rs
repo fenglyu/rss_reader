@@ -8,6 +8,32 @@ use crate::fetcher::FetchResult;
 use crate::scraper::{ChromeScraper, Scraper, ScraperConfig};
 use crate::store::Store;
 
+/// Initialize config file with all options
+pub fn init_config(force: bool) -> Result<()> {
+    let config_path = crate::config::Config::default_config_path()
+        .map_err(|e| RivuletError::Config(e.to_string()))?;
+
+    if config_path.exists() && !force {
+        println!("Config already exists: {}", config_path.display());
+        println!("Use --force to overwrite");
+        return Ok(());
+    }
+
+    // Ensure parent directory exists
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Write the full sample config
+    let sample_config = include_str!("../../config.sample.toml");
+    std::fs::write(&config_path, sample_config)?;
+
+    println!("Created config: {}", config_path.display());
+    println!("\nEdit to customize colors, keybindings, and scraper settings.");
+
+    Ok(())
+}
+
 pub async fn add_feed(ctx: &AppContext, url: &str) -> Result<()> {
     // Check if feed already exists
     if ctx.store.get_feed_by_url(url)?.is_some() {
