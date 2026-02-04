@@ -6,6 +6,7 @@ use crate::fetcher::http_fetcher::HttpFetcher;
 use crate::fetcher::parallel::{ParallelFetcher, DEFAULT_WORKERS};
 use crate::fetcher::Fetcher;
 use crate::normalizer::Normalizer;
+use crate::scraper::{spawn_background_scraper, BackgroundScraperHandle, ScraperConfig};
 use crate::store::sqlite::SqliteStore;
 
 pub struct AppContext {
@@ -13,6 +14,7 @@ pub struct AppContext {
     pub fetcher: Arc<dyn Fetcher + Send + Sync>,
     pub parallel_fetcher: ParallelFetcher,
     pub normalizer: Normalizer,
+    pub scraper_handle: Option<BackgroundScraperHandle>,
 }
 
 impl AppContext {
@@ -21,6 +23,14 @@ impl AppContext {
     }
 
     pub fn with_workers(db_path: Option<PathBuf>, workers: usize) -> Result<Self> {
+        Self::with_scraper_config(db_path, workers, None)
+    }
+
+    pub fn with_scraper_config(
+        db_path: Option<PathBuf>,
+        workers: usize,
+        scraper_config: Option<ScraperConfig>,
+    ) -> Result<Self> {
         let db_path = match db_path {
             Some(p) => p,
             None => Self::default_db_path()?,
@@ -31,11 +41,17 @@ impl AppContext {
         let parallel_fetcher = ParallelFetcher::with_workers(fetcher.clone(), workers);
         let normalizer = Normalizer::new();
 
+        // Spawn background scraper if enabled
+        let scraper_handle = scraper_config
+            .filter(|c| c.enabled)
+            .map(|config| spawn_background_scraper(config, store.clone()));
+
         Ok(Self {
             store,
             fetcher,
             parallel_fetcher,
             normalizer,
+            scraper_handle,
         })
     }
 
@@ -54,7 +70,15 @@ impl AppContext {
             fetcher,
             parallel_fetcher,
             normalizer,
+            scraper_handle: None,
         })
+    }
+
+    /// Queue items for background scraping (if scraper is enabled)
+    pub async fn queue_for_scraping(&self, items: Vec<crate::domain::Item>) {
+        if let Some(ref handle) = self.scraper_handle {
+            handle.queue_items(items).await;
+        }
     }
 
     fn default_db_path() -> Result<PathBuf> {

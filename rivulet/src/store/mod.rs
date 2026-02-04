@@ -21,6 +21,7 @@ pub trait Store {
     fn get_items_by_feed(&self, feed_id: i64) -> Result<Vec<Item>>;
     fn get_all_items(&self) -> Result<Vec<Item>>;
     fn item_exists(&self, id: &str) -> Result<bool>;
+    fn update_item_content(&self, id: &str, content: &str) -> Result<()>;
 
     // State operations
     fn get_item_state(&self, item_id: &str) -> Result<Option<ItemState>>;

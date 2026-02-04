@@ -108,3 +108,13 @@ pub mod store;
 /// Keybindings: j/k navigate, Tab cycles panes, r toggles read,
 /// o opens in browser, R refreshes, q quits.
 pub mod tui;
+
+/// Web scraping module for full article content extraction.
+///
+/// Uses headless Chrome via chromiumoxide to fetch full article content
+/// from web pages when RSS feeds only provide summaries.
+///
+/// - [`ChromeScraper`](scraper::ChromeScraper): Chrome-based scraper
+/// - [`ScraperConfig`](scraper::ScraperConfig): Configuration options
+/// - [`Scraper`](scraper::Scraper): Async trait for scraping implementations
+pub mod scraper;

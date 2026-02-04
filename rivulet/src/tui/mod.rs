@@ -164,13 +164,30 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         let feeds = ctx.store.get_all_feeds()?;
                         let results = ctx
                             .parallel_fetcher
-                            .fetch_all(feeds, ctx.store.clone(), &ctx.normalizer)
+                            .fetch_all(feeds.clone(), ctx.store.clone(), &ctx.normalizer)
                             .await;
 
                         let mut total_new = 0;
-                        for (_, result) in results {
+                        let mut updated_feed_ids = Vec::new();
+                        for (feed_id, result) in results {
                             if let Ok(count) = result {
                                 total_new += count;
+                                if count > 0 {
+                                    updated_feed_ids.push(feed_id);
+                                }
+                            }
+                        }
+
+                        // Queue items for background scraping (non-blocking)
+                        if ctx.scraper_handle.is_some() && !updated_feed_ids.is_empty() {
+                            let mut items_to_scrape = Vec::new();
+                            for feed_id in updated_feed_ids {
+                                if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
+                                    items_to_scrape.extend(items);
+                                }
+                            }
+                            if !items_to_scrape.is_empty() {
+                                ctx.queue_for_scraping(items_to_scrape).await;
                             }
                         }
 

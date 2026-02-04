@@ -5,6 +5,7 @@ use chrono::Utc;
 use crate::app::{AppContext, Result, RivuletError};
 use crate::domain::{Feed, FeedUpdate};
 use crate::fetcher::FetchResult;
+use crate::scraper::{ChromeScraper, Scraper, ScraperConfig};
 use crate::store::Store;
 
 pub async fn add_feed(ctx: &AppContext, url: &str) -> Result<()> {
@@ -43,6 +44,9 @@ pub async fn add_feed(ctx: &AppContext, url: &str) -> Result<()> {
             // Add items
             let count = ctx.store.add_items(&items)?;
 
+            // Queue new items for background scraping
+            ctx.queue_for_scraping(items).await;
+
             if let Some(title) = meta.title {
                 println!("Feed title: {}", title);
             }
@@ -79,17 +83,19 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
 
     let results = ctx
         .parallel_fetcher
-        .fetch_all(feeds, ctx.store.clone(), &ctx.normalizer)
+        .fetch_all(feeds.clone(), ctx.store.clone(), &ctx.normalizer)
         .await;
 
     let mut total_new = 0;
     let mut errors = 0;
+    let mut updated_feed_ids = Vec::new();
 
     for (feed_id, result) in results {
         match result {
             Ok(count) => {
                 total_new += count;
                 if count > 0 {
+                    updated_feed_ids.push(feed_id);
                     if let Ok(Some(feed)) = ctx.store.get_feed(feed_id) {
                         println!("  {} new items from {}", count, feed.display_title());
                     }
@@ -101,6 +107,20 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
                     eprintln!("  Error updating {}: {}", feed.display_title(), e);
                 }
             }
+        }
+    }
+
+    // Queue items from updated feeds for background scraping
+    if ctx.scraper_handle.is_some() && !updated_feed_ids.is_empty() {
+        let mut items_to_scrape = Vec::new();
+        for feed_id in updated_feed_ids {
+            if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
+                items_to_scrape.extend(items);
+            }
+        }
+        if !items_to_scrape.is_empty() {
+            println!("Queuing {} items for background content scraping...", items_to_scrape.len());
+            ctx.queue_for_scraping(items_to_scrape).await;
         }
     }
 
@@ -205,6 +225,8 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
     let mut added = 0;
     let mut errors = 0;
 
+    let mut imported_feed_ids = Vec::new();
+
     for (feed_id, result) in results {
         let feed = feeds_to_fetch.iter().find(|f| f.id == feed_id);
         let title = feed
@@ -216,6 +238,7 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
             Ok(count) => {
                 println!("  + {} ({} items)", title, count);
                 added += 1;
+                imported_feed_ids.push(feed_id);
             }
             Err(e) => {
                 eprintln!("  ! {} - error: {}", title, e);
@@ -223,6 +246,20 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
                 let _ = ctx.store.delete_feed(feed_id);
                 errors += 1;
             }
+        }
+    }
+
+    // Queue items from imported feeds for background scraping
+    if ctx.scraper_handle.is_some() && !imported_feed_ids.is_empty() {
+        let mut items_to_scrape = Vec::new();
+        for feed_id in imported_feed_ids {
+            if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
+                items_to_scrape.extend(items);
+            }
+        }
+        if !items_to_scrape.is_empty() {
+            println!("Queuing {} items for background content scraping...", items_to_scrape.len());
+            ctx.queue_for_scraping(items_to_scrape).await;
         }
     }
 
@@ -260,4 +297,89 @@ fn extract_attr(line: &str, attr: &str) -> Option<String> {
     let end = rest.find('"')?;
     let value = &rest[..end];
     Some(html_escape::decode_html_entities(value).to_string())
+}
+
+/// Scrape full content for items that only have summaries
+pub async fn scrape_content(
+    ctx: &AppContext,
+    feed_url: Option<&str>,
+    limit: usize,
+    concurrency: usize,
+    visible: bool,
+) -> Result<()> {
+    // Get items to scrape
+    let items = if let Some(url) = feed_url {
+        let feed = ctx
+            .store
+            .get_feed_by_url(url)?
+            .ok_or_else(|| RivuletError::FeedNotFound(url.to_string()))?;
+        ctx.store.get_items_by_feed(feed.id)?
+    } else {
+        ctx.store.get_all_items()?
+    };
+
+    // Filter items that need scraping (have link but no/short content)
+    let items_to_scrape: Vec<_> = items
+        .into_iter()
+        .filter(|item| ChromeScraper::needs_scraping(item))
+        .take(limit)
+        .collect();
+
+    if items_to_scrape.is_empty() {
+        println!("No items need scraping");
+        return Ok(());
+    }
+
+    println!(
+        "Scraping {} items with {} concurrent pages...",
+        items_to_scrape.len(),
+        concurrency
+    );
+
+    // Create scraper config
+    let config = ScraperConfig {
+        headless: !visible,
+        max_concurrency: concurrency,
+        ..Default::default()
+    };
+
+    // Initialize the scraper
+    let scraper = ChromeScraper::new(config).await?;
+
+    // Scrape all items
+    let results = scraper.scrape_items(&items_to_scrape, concurrency).await;
+
+    let mut success = 0;
+    let mut errors = 0;
+
+    for (item_id, result) in results {
+        let item = items_to_scrape.iter().find(|i| i.id == item_id);
+        let title = item.map(|i| i.display_title()).unwrap_or("Unknown");
+
+        match result {
+            Ok(scrape_result) => {
+                // Update item content in store
+                ctx.store.update_item_content(&item_id, &scrape_result.content)?;
+                let content_type = if scrape_result.is_html { "HTML" } else { "text" };
+                println!(
+                    "  + {} ({}, {} chars)",
+                    title,
+                    content_type,
+                    scrape_result.content.len()
+                );
+                success += 1;
+            }
+            Err(e) => {
+                eprintln!("  ! {} - error: {}", title, e);
+                errors += 1;
+            }
+        }
+    }
+
+    println!(
+        "\nScraping complete: {} succeeded, {} failed",
+        success, errors
+    );
+
+    Ok(())
 }

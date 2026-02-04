@@ -26,6 +26,9 @@ pub enum RivuletError {
     #[error("Configuration error: {0}")]
     Config(String),
 
+    #[error("Scraper error: {0}")]
+    Scraper(String),
+
     #[error("{0}")]
     Other(String),
 }

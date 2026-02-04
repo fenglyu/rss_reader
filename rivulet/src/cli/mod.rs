@@ -48,6 +48,24 @@ pub enum Commands {
         #[command(subcommand)]
         action: DaemonAction,
     },
+    /// Scrape full content for items using headless Chrome
+    Scrape {
+        /// Only scrape items from a specific feed URL
+        #[arg(long)]
+        feed: Option<String>,
+
+        /// Maximum number of items to scrape
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+
+        /// Number of concurrent browser pages
+        #[arg(short, long, default_value = "3")]
+        concurrency: usize,
+
+        /// Run in non-headless mode (show browser)
+        #[arg(long)]
+        visible: bool,
+    },
 }
 
 #[derive(Subcommand)]

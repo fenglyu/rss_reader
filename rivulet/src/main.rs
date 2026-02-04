@@ -17,7 +17,15 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let ctx = AppContext::with_workers(None, cli.workers)?;
+
+    // Load config for scraper settings
+    let config = Config::load().unwrap_or_else(|e| {
+        tracing::debug!("Failed to load config: {}. Using defaults.", e);
+        Config::default()
+    });
+
+    // Create app context with scraper enabled based on config
+    let ctx = AppContext::with_scraper_config(None, cli.workers, Some(config.scraper.clone()))?;
 
     match cli.command {
         Commands::Add { url } => {
@@ -40,11 +48,15 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Tui => {
-            let config = Config::load().unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load config: {}. Using defaults.", e);
-                Config::default()
-            });
             rivulet::tui::run(Arc::new(ctx), Arc::new(config)).await?;
+        }
+        Commands::Scrape {
+            feed,
+            limit,
+            concurrency,
+            visible,
+        } => {
+            commands::scrape_content(&ctx, feed.as_deref(), limit, concurrency, visible).await?;
         }
         Commands::Daemon { action } => {
             match action {

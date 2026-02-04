@@ -9,6 +9,7 @@ pub mod keybindings;
 pub use colors::ColorConfig;
 pub use keybindings::KeybindingConfig;
 
+use crate::scraper::ScraperConfig;
 use serde::Deserialize;
 use std::fs;
 use std::io::Write;
@@ -20,6 +21,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub colors: ColorConfig,
     pub keybindings: KeybindingConfig,
+    pub scraper: ScraperConfig,
 }
 
 impl Default for Config {
@@ -27,6 +29,7 @@ impl Default for Config {
         Self {
             colors: ColorConfig::default(),
             keybindings: KeybindingConfig::default(),
+            scraper: ScraperConfig::default(),
         }
     }
 }
@@ -149,6 +152,55 @@ open_in_browser = ["o"]
 refresh = ["R"]
 toggle_maximize = ["m"]
 delete_feed = ["d", "Delete"]
+
+[scraper]
+# Run browser in headless mode (no visible window)
+headless = true
+
+# Page load timeout in seconds
+timeout_secs = 30
+
+# Wait time after page load for dynamic content (milliseconds)
+wait_after_load_ms = 1000
+
+# Maximum concurrent browser pages
+max_concurrency = 5
+
+# Block images for faster loading
+block_images = true
+
+# Block stylesheets for faster loading
+block_stylesheets = true
+
+# CSS selectors to try for article content extraction (in priority order)
+content_selectors = [
+    "article",
+    "[role=\"main\"]",
+    "main",
+    ".post-content",
+    ".article-content",
+    ".entry-content",
+    ".content",
+    "#content",
+    ".post",
+    ".article",
+]
+
+# Elements to remove before extraction (ads, navigation, etc.)
+remove_selectors = [
+    "nav",
+    "header",
+    "footer",
+    "aside",
+    ".sidebar",
+    ".advertisement",
+    ".ad",
+    ".ads",
+    ".social-share",
+    ".comments",
+    "script",
+    "style",
+]
 "##
         .to_string()
     }

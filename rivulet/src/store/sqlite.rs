@@ -514,6 +514,22 @@ impl Store for SqliteStore {
 
         Ok(count)
     }
+
+    fn update_item_content(&self, id: &str, content: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        conn.execute(
+            "UPDATE items SET content = ?1 WHERE id = ?2",
+            params![content, id],
+        )?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
