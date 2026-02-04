@@ -34,6 +34,32 @@ cargo build --release
 # Binary at ./target/release/rivulet
 ```
 
+### Post-Installation Setup
+
+```bash
+# Initialize config with all options and comments
+rivulet init
+
+# Or just run any command - a basic config is auto-created
+rivulet add https://example.com/feed.xml
+```
+
+### Config Locations
+
+| Platform | Config Path |
+|----------|-------------|
+| macOS | `~/.config/rivulet/config.toml` |
+| Linux | `~/.config/rivulet/config.toml` |
+| Windows | `%APPDATA%\rivulet\config.toml` |
+
+### Data Locations
+
+| Platform | Database Path |
+|----------|---------------|
+| macOS | `~/Library/Application Support/rivulet/rivulet.db` |
+| Linux | `~/.local/share/rivulet/rivulet.db` |
+| Windows | `%APPDATA%\rivulet\rivulet.db` |
+
 ### Requirements
 
 - **Rust** 1.70+ (for building)

@@ -37,6 +37,14 @@ rivulet update
 rivulet tui
 ```
 
+## Config & Data Locations
+
+| Platform | Config | Database |
+|----------|--------|----------|
+| macOS | `~/.config/rivulet/config.toml` | `~/Library/Application Support/rivulet/rivulet.db` |
+| Linux | `~/.config/rivulet/config.toml` | `~/.local/share/rivulet/rivulet.db` |
+| Windows | `%APPDATA%\rivulet\config.toml` | `%APPDATA%\rivulet\rivulet.db` |
+
 ## Screenshots
 
 ```
