@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+debug/
+*.pdb
+
+# Cargo lock file (optional for binaries, but keeping for reproducibility)
+# Cargo.lock
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Database files (user data)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Log files
+*.log
+
+# Backup files
+*.bak
+*.backup
+
+# Generated documentation (rebuild with cargo doc)
+/doc/target/

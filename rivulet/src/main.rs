@@ -24,6 +24,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Remove { url } => {
             commands::remove_feed(&ctx, &url).await?;
         }
+        Commands::Import { path } => {
+            commands::import_opml(&ctx, &path).await?;
+        }
         Commands::Update => {
             commands::update_feeds(&ctx).await?;
         }

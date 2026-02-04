@@ -22,6 +22,11 @@ pub enum Commands {
         /// URL of the feed to remove
         url: String,
     },
+    /// Import feeds from an OPML file
+    Import {
+        /// Path to the OPML file
+        path: std::path::PathBuf,
+    },
     /// Update all feeds
     Update,
     /// List feeds or items
