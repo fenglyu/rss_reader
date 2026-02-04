@@ -1,0 +1,35 @@
+pub mod commands;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "rivulet")]
+#[command(about = "A terminal RSS/Atom reader", long_about = None)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Add a new feed
+    Add {
+        /// URL of the feed to add
+        url: String,
+    },
+    /// Remove a feed
+    Remove {
+        /// URL of the feed to remove
+        url: String,
+    },
+    /// Update all feeds
+    Update,
+    /// List feeds or items
+    List {
+        /// Show items instead of feeds
+        #[arg(long)]
+        items: bool,
+    },
+    /// Launch the TUI
+    Tui,
+}

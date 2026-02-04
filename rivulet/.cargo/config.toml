@@ -1,0 +1,2 @@
+[env]
+LIBRARY_PATH = "/opt/homebrew/opt/sqlite/lib:/opt/homebrew/opt/libiconv/lib"
