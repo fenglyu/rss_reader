@@ -47,6 +47,21 @@
 /// store, fetcher, normalizer.
 pub mod app;
 
+/// Configuration management for the TUI.
+///
+/// Loads from `~/.config/rivulet/config.toml`, supporting:
+/// - Custom colors (named or hex)
+/// - Custom keybindings
+pub mod config;
+
+/// Background daemon for automatic feed updates.
+///
+/// Provides Chrome-updater-style background updates:
+/// - `rivulet daemon start` - Start the background updater
+/// - `rivulet daemon stop` - Stop the daemon
+/// - `rivulet daemon status` - Check if daemon is running
+pub mod daemon;
+
 /// Command-line interface using clap.
 ///
 /// Defines the CLI structure and subcommands:

@@ -7,12 +7,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::{
+    event::KeyCode,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::app::{AppContext, Result};
+use crate::config::Config;
 use crate::store::Store;
 
 use self::app::{ActivePane, TuiApp};
@@ -20,9 +22,9 @@ use self::event::{Action, AppEvent, EventHandler};
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
-pub async fn run(ctx: Arc<AppContext>) -> Result<()> {
+pub async fn run(ctx: Arc<AppContext>, config: Arc<Config>) -> Result<()> {
     let mut terminal = setup_terminal()?;
-    let result = run_app(&mut terminal, ctx).await;
+    let result = run_app(&mut terminal, ctx, config).await;
     restore_terminal(&mut terminal)?;
     result
 }
@@ -43,7 +45,7 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
     Ok(())
 }
 
-async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>) -> Result<()> {
+async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) -> Result<()> {
     let mut tui_app = TuiApp::new();
     let event_handler = EventHandler::new(Duration::from_millis(100));
 
@@ -52,11 +54,27 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>) -> Result<()> {
     load_all_items(&mut tui_app, &ctx)?;
 
     loop {
-        terminal.draw(|frame| layout::render(frame, &mut tui_app))?;
+        terminal.draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
 
         match event_handler.next()? {
             AppEvent::Key(key) => {
-                let action = Action::from(key);
+                // Handle pending delete confirmation
+                if let Some((feed_id, feed_title)) = tui_app.pending_delete.take() {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            ctx.store.delete_feed(feed_id)?;
+                            load_feeds(&mut tui_app, &ctx)?;
+                            load_all_items(&mut tui_app, &ctx)?;
+                            tui_app.set_status(format!("Deleted feed: {}", feed_title));
+                        }
+                        _ => {
+                            tui_app.set_status("Delete cancelled".to_string());
+                        }
+                    }
+                    continue;
+                }
+
+                let action = config.keybindings.get_action(&key);
                 match action {
                     Action::Quit => {
                         tui_app.should_quit = true;
@@ -141,7 +159,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>) -> Result<()> {
                     }
                     Action::Refresh => {
                         tui_app.is_refreshing = true;
-                        terminal.draw(|frame| layout::render(frame, &mut tui_app))?;
+                        terminal.draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
 
                         let feeds = ctx.store.get_all_feeds()?;
                         let results = ctx
@@ -161,6 +179,15 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>) -> Result<()> {
 
                         tui_app.is_refreshing = false;
                         tui_app.set_status(format!("Refreshed: {} new items", total_new));
+                    }
+                    Action::DeleteFeed => {
+                        if tui_app.active_pane == ActivePane::Feeds {
+                            if let Some(feed) = tui_app.selected_feed() {
+                                let feed_id = feed.id;
+                                let feed_title = feed.display_title().to_string();
+                                tui_app.pending_delete = Some((feed_id, feed_title));
+                            }
+                        }
                     }
                     Action::None => {}
                 }

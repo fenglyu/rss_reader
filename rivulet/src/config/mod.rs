@@ -1,0 +1,219 @@
+//! Configuration management for Rivulet TUI.
+//!
+//! Configuration is read from `~/.config/rivulet/config.toml` at startup.
+//! If the file doesn't exist, a default configuration with comments is created.
+
+pub mod colors;
+pub mod keybindings;
+
+pub use colors::ColorConfig;
+pub use keybindings::KeybindingConfig;
+
+use serde::Deserialize;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
+
+/// Main configuration struct.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub colors: ColorConfig,
+    pub keybindings: KeybindingConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            colors: ColorConfig::default(),
+            keybindings: KeybindingConfig::default(),
+        }
+    }
+}
+
+impl Config {
+    /// Load configuration from the default path.
+    ///
+    /// If the config file doesn't exist, creates a default one with comments.
+    /// If the config file exists but is invalid, returns an error.
+    /// Missing fields in the config file will use default values.
+    pub fn load() -> Result<Self, ConfigError> {
+        let config_path = Self::default_config_path()?;
+
+        if !config_path.exists() {
+            // Create default config with comments
+            Self::create_default_config(&config_path)?;
+            return Ok(Self::default());
+        }
+
+        let content = fs::read_to_string(&config_path).map_err(|e| ConfigError::Io {
+            path: config_path.clone(),
+            source: e,
+        })?;
+
+        let config: Config = toml::from_str(&content).map_err(|e| ConfigError::Parse {
+            path: config_path,
+            source: e,
+        })?;
+
+        Ok(config)
+    }
+
+    /// Get the default config file path: `~/.config/rivulet/config.toml`
+    pub fn default_config_path() -> Result<PathBuf, ConfigError> {
+        let config_dir = dirs::config_dir().ok_or(ConfigError::NoConfigDir)?;
+        Ok(config_dir.join("rivulet").join("config.toml"))
+    }
+
+    /// Create a default config file with comments.
+    fn create_default_config(path: &PathBuf) -> Result<(), ConfigError> {
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| ConfigError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+
+        let default_config = Self::default_config_content();
+
+        let mut file = fs::File::create(path).map_err(|e| ConfigError::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+
+        file.write_all(default_config.as_bytes())
+            .map_err(|e| ConfigError::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+
+        Ok(())
+    }
+
+    /// Generate the default config file content with comments.
+    fn default_config_content() -> String {
+        r##"# Rivulet TUI Configuration
+#
+# Colors can be specified as:
+# - Named colors: Black, Red, Green, Yellow, Blue, Magenta, Cyan, Gray,
+#   DarkGray, LightRed, LightGreen, LightYellow, LightBlue, LightMagenta,
+#   LightCyan, White, Reset
+# - Hex colors: "#RRGGBB" or "#RGB"
+#
+# Keybindings can be specified as:
+# - Single characters: "a", "A", "1"
+# - Special keys: Enter, Tab, BackTab, Backspace, Delete, Home, End,
+#   PageUp, PageDown, Up, Down, Left, Right, Esc, Space, F1-F12
+# - With modifiers: "Ctrl+c", "Shift+Tab", "Alt+Enter"
+
+[colors]
+# Border colors
+active_border = "Cyan"
+inactive_border = "DarkGray"
+
+# Selection highlight
+selection_bg_active = "Cyan"
+selection_fg_active = "Black"
+selection_bg_inactive = "DarkGray"
+selection_fg_inactive = "White"
+
+# Item colors
+read_item = "DarkGray"
+unread_item = "White"
+
+# Metadata colors in preview
+metadata_author = "Yellow"
+metadata_date = "Yellow"
+metadata_link = "Blue"
+
+# Status bar
+status_fg = "White"
+status_bg = "DarkGray"
+
+[keybindings]
+# Navigation
+quit = ["q", "Ctrl+c"]
+move_up = ["k", "Up"]
+move_down = ["j", "Down"]
+next_page = ["n", "PageDown"]
+prev_page = ["p", "PageUp"]
+next_pane = ["Tab"]
+prev_pane = ["BackTab", "Shift+Tab"]
+
+# Actions
+select = ["Enter"]
+toggle_read = ["r"]
+toggle_star = ["s"]
+open_in_browser = ["o"]
+refresh = ["R"]
+toggle_maximize = ["m"]
+delete_feed = ["d", "Delete"]
+"##
+        .to_string()
+    }
+}
+
+/// Configuration errors.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("Could not determine config directory")]
+    NoConfigDir,
+
+    #[error("Failed to read/write config file at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("Failed to parse config file at {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_deserializes() {
+        let content = Config::default_config_content();
+        let config: Config = toml::from_str(&content).expect("Default config should be valid TOML");
+
+        // Check a few values
+        assert_eq!(config.colors.active_border, ratatui::style::Color::Cyan);
+        assert_eq!(config.keybindings.quit, vec!["q", "Ctrl+c"]);
+    }
+
+    #[test]
+    fn test_partial_config() {
+        let content = r##"
+[colors]
+active_border = "#FF0000"
+"##;
+        let config: Config = toml::from_str(content).expect("Partial config should work");
+
+        // Custom value
+        assert_eq!(
+            config.colors.active_border,
+            ratatui::style::Color::Rgb(255, 0, 0)
+        );
+        // Default value
+        assert_eq!(
+            config.colors.inactive_border,
+            ratatui::style::Color::DarkGray
+        );
+    }
+
+    #[test]
+    fn test_empty_config() {
+        let content = "";
+        let config: Config = toml::from_str(content).expect("Empty config should work");
+
+        // All defaults
+        assert_eq!(config.colors.active_border, ratatui::style::Color::Cyan);
+        assert_eq!(config.keybindings.quit, vec!["q", "Ctrl+c"]);
+    }
+}

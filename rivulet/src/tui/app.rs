@@ -45,6 +45,8 @@ pub struct TuiApp {
     // List states for scrolling
     pub feed_list_state: ListState,
     pub item_list_state: ListState,
+    // Pending delete confirmation (feed_id, feed_title)
+    pub pending_delete: Option<(i64, String)>,
 }
 
 impl TuiApp {
@@ -68,6 +70,7 @@ impl TuiApp {
             maximized: false,
             feed_list_state,
             item_list_state,
+            pending_delete: None,
         }
     }
 

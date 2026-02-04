@@ -43,4 +43,35 @@ pub enum Commands {
     },
     /// Launch the TUI
     Tui,
+    /// Background daemon for automatic updates
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DaemonAction {
+    /// Start the background daemon
+    Start {
+        /// Update interval (e.g., "1h", "30m", "6h", "1d")
+        #[arg(short, long, default_value = "1h")]
+        interval: String,
+
+        /// Skip initial update on start
+        #[arg(long)]
+        no_initial_update: bool,
+
+        /// Log file path (default: stdout)
+        #[arg(short, long)]
+        log: Option<std::path::PathBuf>,
+
+        /// Run in foreground (don't detach)
+        #[arg(short, long)]
+        foreground: bool,
+    },
+    /// Stop the running daemon
+    Stop,
+    /// Check daemon status
+    Status,
 }

@@ -1,14 +1,15 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
+use crate::config::ColorConfig;
 use crate::tui::app::{ActivePane, TuiApp};
 
-pub fn render(frame: &mut Frame, app: &mut TuiApp) {
+pub fn render(frame: &mut Frame, app: &mut TuiApp, colors: &ColorConfig) {
     if app.maximized {
         // Maximized mode: only preview and status bar
         let chunks = Layout::default()
@@ -19,8 +20,8 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
             ])
             .split(frame.area());
 
-        render_preview_pane(frame, app, chunks[0]);
-        render_status_bar(frame, app, chunks[1]);
+        render_preview_pane(frame, app, chunks[0], colors);
+        render_status_bar(frame, app, chunks[1], colors);
     } else {
         // Normal mode: all panes
         let chunks = Layout::default()
@@ -33,19 +34,19 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp) {
             ])
             .split(frame.area());
 
-        render_feeds_pane(frame, app, chunks[0]);
-        render_items_pane(frame, app, chunks[1]);
-        render_preview_pane(frame, app, chunks[2]);
-        render_status_bar(frame, app, chunks[3]);
+        render_feeds_pane(frame, app, chunks[0], colors);
+        render_items_pane(frame, app, chunks[1], colors);
+        render_preview_pane(frame, app, chunks[2], colors);
+        render_status_bar(frame, app, chunks[3], colors);
     }
 }
 
-fn render_feeds_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
+fn render_feeds_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &ColorConfig) {
     let is_active = app.active_pane == ActivePane::Feeds;
     let border_style = if is_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(colors.active_border)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(colors.inactive_border)
     };
 
     let items: Vec<ListItem> = app
@@ -77,11 +78,13 @@ fn render_feeds_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
 
     let highlight_style = if is_active {
         Style::default()
-            .bg(Color::Cyan)
-            .fg(Color::Black)
+            .bg(colors.selection_bg_active)
+            .fg(colors.selection_fg_active)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().bg(Color::DarkGray)
+        Style::default()
+            .bg(colors.selection_bg_inactive)
+            .fg(colors.selection_fg_inactive)
     };
 
     let block = Block::default()
@@ -97,12 +100,12 @@ fn render_feeds_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.feed_list_state);
 }
 
-fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
+fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &ColorConfig) {
     let is_active = app.active_pane == ActivePane::Items;
     let border_style = if is_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(colors.active_border)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(colors.inactive_border)
     };
 
     let items: Vec<ListItem> = app
@@ -128,9 +131,9 @@ fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
             let content = format!("{} {} {}", marker, date, item.display_title());
 
             let style = if !is_read {
-                Style::default().add_modifier(Modifier::BOLD)
+                Style::default().fg(colors.unread_item).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(colors.read_item)
             };
 
             ListItem::new(content).style(style)
@@ -146,11 +149,13 @@ fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
 
     let highlight_style = if is_active {
         Style::default()
-            .bg(Color::Cyan)
-            .fg(Color::Black)
+            .bg(colors.selection_bg_active)
+            .fg(colors.selection_fg_active)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().bg(Color::DarkGray)
+        Style::default()
+            .bg(colors.selection_bg_inactive)
+            .fg(colors.selection_fg_inactive)
     };
 
     let block = Block::default()
@@ -166,12 +171,12 @@ fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.item_list_state);
 }
 
-fn render_preview_pane(frame: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_preview_pane(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &ColorConfig) {
     let is_active = app.active_pane == ActivePane::Preview;
     let border_style = if is_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(colors.active_border)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(colors.inactive_border)
     };
 
     let (title, content) = if let Some(item) = app.selected_item() {
@@ -189,19 +194,19 @@ fn render_preview_pane(frame: &mut Frame, app: &TuiApp, area: Rect) {
         if let Some(author) = &item.author {
             lines.push(Line::from(Span::styled(
                 format!("By: {}", author),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(colors.metadata_author),
             )));
         }
         if let Some(date) = item.published_at {
             lines.push(Line::from(Span::styled(
                 format!("Date: {}", date.format("%Y-%m-%d %H:%M")),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(colors.metadata_date),
             )));
         }
         if let Some(link) = &item.link {
             lines.push(Line::from(Span::styled(
                 format!("Link: {}", link),
-                Style::default().fg(Color::Blue),
+                Style::default().fg(colors.metadata_link),
             )));
         }
         lines.push(Line::from(""));
@@ -232,18 +237,20 @@ fn render_preview_pane(frame: &mut Frame, app: &TuiApp, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
-    let status = if app.is_refreshing {
+fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &ColorConfig) {
+    let status = if let Some((_, ref title)) = app.pending_delete {
+        format!("Delete \"{}\"? (y/n)", title)
+    } else if app.is_refreshing {
         "Refreshing feeds...".to_string()
     } else if let Some(ref msg) = app.status_message {
         msg.clone()
     } else if app.maximized {
         "j/k:Scroll  n/p:Page  m:Exit maximize  q:Quit".to_string()
     } else {
-        "j/k:Nav  n/p:Page  Tab:Pane  r:Read  s:Star  o:Open  R:Refresh  m:Maximize  q:Quit".to_string()
+        "j/k:Nav  n/p:Page  Tab:Pane  r:Read  s:Star  o:Open  R:Refresh  d:Delete  m:Max  q:Quit".to_string()
     };
 
-    let paragraph = Paragraph::new(status).style(Style::default().fg(Color::White).bg(Color::DarkGray));
+    let paragraph = Paragraph::new(status).style(Style::default().fg(colors.status_fg).bg(colors.status_bg));
 
     frame.render_widget(paragraph, area);
 }
