@@ -70,8 +70,8 @@ async fn main() -> anyhow::Result<()> {
                     log,
                     foreground,
                 } => {
-                    let interval_secs = DaemonConfig::parse_interval(&interval)
-                        .map_err(|e| anyhow::anyhow!(e))?;
+                    let interval_secs =
+                        DaemonConfig::parse_interval(&interval).map_err(|e| anyhow::anyhow!(e))?;
 
                     let daemon_config = DaemonConfig {
                         update_interval_secs: interval_secs,
@@ -121,8 +121,8 @@ async fn main() -> anyhow::Result<()> {
 
                         #[cfg(windows)]
                         {
-                            use std::process::Command;
                             use std::os::windows::process::CommandExt;
+                            use std::process::Command;
 
                             const CREATE_NO_WINDOW: u32 = 0x08000000;
                             const DETACHED_PROCESS: u32 = 0x00000008;
@@ -156,12 +156,10 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                DaemonAction::Stop => {
-                    match rivulet::daemon::stop_daemon() {
-                        Ok(()) => println!("Daemon stopped"),
-                        Err(e) => eprintln!("Error: {}", e),
-                    }
-                }
+                DaemonAction::Stop => match rivulet::daemon::stop_daemon() {
+                    Ok(()) => println!("Daemon stopped"),
+                    Err(e) => eprintln!("Error: {}", e),
+                },
                 DaemonAction::Status => {
                     println!("{}", rivulet::daemon::daemon_status());
                 }

@@ -43,11 +43,13 @@ impl DaemonConfig {
         let s = s.trim().to_lowercase();
 
         if let Some(hours) = s.strip_suffix('h') {
-            hours.parse::<u64>()
+            hours
+                .parse::<u64>()
                 .map(|h| h * 3600)
                 .map_err(|_| format!("Invalid hours: {}", hours))
         } else if let Some(minutes) = s.strip_suffix('m') {
-            minutes.parse::<u64>()
+            minutes
+                .parse::<u64>()
                 .map(|m| m * 60)
                 .map_err(|_| format!("Invalid minutes: {}", minutes))
         } else if let Some(days) = s.strip_suffix('d') {
@@ -66,11 +68,11 @@ impl DaemonConfig {
 
     /// Format interval for display
     pub fn format_interval(secs: u64) -> String {
-        if secs >= 86400 && secs % 86400 == 0 {
+        if secs >= 86400 && secs.is_multiple_of(86400) {
             format!("{}d", secs / 86400)
-        } else if secs >= 3600 && secs % 3600 == 0 {
+        } else if secs >= 3600 && secs.is_multiple_of(3600) {
             format!("{}h", secs / 3600)
-        } else if secs >= 60 && secs % 60 == 0 {
+        } else if secs >= 60 && secs.is_multiple_of(60) {
             format!("{}m", secs / 60)
         } else {
             format!("{}s", secs)
@@ -97,7 +99,7 @@ impl Daemon {
     /// Get the PID file path
     pub fn pid_file_path() -> Option<PathBuf> {
         dirs::runtime_dir()
-            .or_else(|| dirs::cache_dir())
+            .or_else(dirs::cache_dir)
             .map(|d| d.join("rivulet").join("daemon.pid"))
     }
 
@@ -178,7 +180,7 @@ impl Daemon {
         // Check for existing daemon
         if Self::is_running() {
             return Err(crate::app::RivuletError::Other(
-                "Another daemon instance is already running".to_string()
+                "Another daemon instance is already running".to_string(),
             ));
         }
 
@@ -194,12 +196,12 @@ impl Daemon {
         {
             let running_clone = running.clone();
             tokio::spawn(async move {
-                let mut sigterm = tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::terminate()
-                ).expect("Failed to set up SIGTERM handler");
-                let mut sigint = tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::interrupt()
-                ).expect("Failed to set up SIGINT handler");
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("Failed to set up SIGTERM handler");
+                let mut sigint =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                        .expect("Failed to set up SIGINT handler");
 
                 tokio::select! {
                     _ = sigterm.recv() => {},
@@ -262,7 +264,8 @@ impl Daemon {
                     return;
                 }
 
-                let results = self.ctx
+                let results = self
+                    .ctx
                     .parallel_fetcher
                     .fetch_all(feeds, self.ctx.store.clone(), &self.ctx.normalizer)
                     .await;
@@ -319,17 +322,19 @@ impl Daemon {
 
 /// Stop a running daemon by reading PID file and sending signal
 pub fn stop_daemon() -> Result<(), String> {
-    let pid_path = Daemon::pid_file_path()
-        .ok_or_else(|| "Could not determine PID file path".to_string())?;
+    let pid_path =
+        Daemon::pid_file_path().ok_or_else(|| "Could not determine PID file path".to_string())?;
 
     if !pid_path.exists() {
         return Err("No daemon is running (PID file not found)".to_string());
     }
 
-    let pid_str = fs::read_to_string(&pid_path)
-        .map_err(|e| format!("Failed to read PID file: {}", e))?;
+    let pid_str =
+        fs::read_to_string(&pid_path).map_err(|e| format!("Failed to read PID file: {}", e))?;
 
-    let pid: u32 = pid_str.trim().parse()
+    let pid: u32 = pid_str
+        .trim()
+        .parse()
         .map_err(|_| "Invalid PID in PID file".to_string())?;
 
     #[cfg(unix)]

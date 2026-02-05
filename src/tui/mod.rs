@@ -149,7 +149,8 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                                     if let Some(state) = tui_app.item_states.get_mut(&item_id) {
                                         state.is_read = true;
                                     } else {
-                                        let mut state = crate::domain::ItemState::new(item_id.clone());
+                                        let mut state =
+                                            crate::domain::ItemState::new(item_id.clone());
                                         state.is_read = true;
                                         tui_app.item_states.insert(item_id, state);
                                     }
@@ -159,7 +160,8 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                     }
                     Action::Refresh => {
                         tui_app.is_refreshing = true;
-                        terminal.draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
+                        terminal
+                            .draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
 
                         let feeds = ctx.store.get_all_feeds()?;
                         let results = ctx

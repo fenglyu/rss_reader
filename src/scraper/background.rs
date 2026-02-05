@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::domain::Item;
-use crate::scraper::{ChromeScraper, ScraperConfig, Scraper};
+use crate::scraper::{ChromeScraper, Scraper, ScraperConfig};
 use crate::store::Store;
 
 /// Message type for the background scraper

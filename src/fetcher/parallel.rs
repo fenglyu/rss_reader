@@ -72,7 +72,11 @@ async fn fetch_single_feed<S: Store>(
     normalizer: &Normalizer,
 ) -> Result<usize> {
     let result = fetcher
-        .fetch(&feed.url, feed.etag.as_deref(), feed.last_modified.as_deref())
+        .fetch(
+            &feed.url,
+            feed.etag.as_deref(),
+            feed.last_modified.as_deref(),
+        )
         .await?;
 
     match result {

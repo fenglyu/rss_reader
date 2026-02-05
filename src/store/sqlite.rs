@@ -174,9 +174,11 @@ impl Store for SqliteStore {
                     description: row.get(3)?,
                     etag: row.get(4)?,
                     last_modified: row.get(5)?,
-                    last_fetched_at: row.get::<_, Option<String>>(6)?
+                    last_fetched_at: row
+                        .get::<_, Option<String>>(6)?
                         .and_then(|s| Self::parse_datetime(&s)),
-                    created_at: row.get::<_, String>(7)
+                    created_at: row
+                        .get::<_, String>(7)
                         .ok()
                         .and_then(|s| Self::parse_datetime(&s))
                         .unwrap_or_else(Utc::now),
@@ -196,7 +198,10 @@ impl Store for SqliteStore {
         })?;
 
         if let Some(ref title) = update.title {
-            conn.execute("UPDATE feeds SET title = ?1 WHERE id = ?2", params![title, id])?;
+            conn.execute(
+                "UPDATE feeds SET title = ?1 WHERE id = ?2",
+                params![title, id],
+            )?;
         }
         if let Some(ref description) = update.description {
             conn.execute(
@@ -205,7 +210,10 @@ impl Store for SqliteStore {
             )?;
         }
         if let Some(ref etag) = update.etag {
-            conn.execute("UPDATE feeds SET etag = ?1 WHERE id = ?2", params![etag, id])?;
+            conn.execute(
+                "UPDATE feeds SET etag = ?1 WHERE id = ?2",
+                params![etag, id],
+            )?;
         }
         if let Some(ref last_modified) = update.last_modified {
             conn.execute(
@@ -355,9 +363,11 @@ impl Store for SqliteStore {
                     content: row.get(4)?,
                     summary: row.get(5)?,
                     author: row.get(6)?,
-                    published_at: row.get::<_, Option<String>>(7)?
+                    published_at: row
+                        .get::<_, Option<String>>(7)?
                         .and_then(|s| Self::parse_datetime(&s)),
-                    fetched_at: row.get::<_, String>(8)
+                    fetched_at: row
+                        .get::<_, String>(8)
                         .ok()
                         .and_then(|s| Self::parse_datetime(&s))
                         .unwrap_or_else(Utc::now),
@@ -391,9 +401,11 @@ impl Store for SqliteStore {
                     content: row.get(4)?,
                     summary: row.get(5)?,
                     author: row.get(6)?,
-                    published_at: row.get::<_, Option<String>>(7)?
+                    published_at: row
+                        .get::<_, Option<String>>(7)?
                         .and_then(|s| Self::parse_datetime(&s)),
-                    fetched_at: row.get::<_, String>(8)
+                    fetched_at: row
+                        .get::<_, String>(8)
                         .ok()
                         .and_then(|s| Self::parse_datetime(&s))
                         .unwrap_or_else(Utc::now),
@@ -412,10 +424,11 @@ impl Store for SqliteStore {
             ))
         })?;
 
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM items WHERE id = ?1", params![id], |row| {
-                row.get(0)
-            })?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM items WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
 
         Ok(count > 0)
     }
@@ -438,9 +451,11 @@ impl Store for SqliteStore {
                         item_id: row.get(0)?,
                         is_read: row.get::<_, i32>(1)? != 0,
                         is_starred: row.get::<_, i32>(2)? != 0,
-                        read_at: row.get::<_, Option<String>>(3)?
+                        read_at: row
+                            .get::<_, Option<String>>(3)?
                             .and_then(|s| Self::parse_datetime(&s)),
-                        starred_at: row.get::<_, Option<String>>(4)?
+                        starred_at: row
+                            .get::<_, Option<String>>(4)?
                             .and_then(|s| Self::parse_datetime(&s)),
                     })
                 },
@@ -585,7 +600,11 @@ mod tests {
         let feed_id = store.add_feed(&feed).unwrap();
 
         for i in 0..5 {
-            let item = Item::new(feed_id, "https://example.com/feed.xml", &format!("entry-{}", i));
+            let item = Item::new(
+                feed_id,
+                "https://example.com/feed.xml",
+                &format!("entry-{}", i),
+            );
             store.add_item(&item).unwrap();
         }
 

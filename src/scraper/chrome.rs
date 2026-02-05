@@ -92,14 +92,8 @@ impl ChromeScraper {
             .map_err(|e| RivuletError::Scraper(format!("Failed to parse result: {:?}", e)))?;
 
         // Extract content from result
-        let html = result["html"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let text = result["text"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let html = result["html"].as_str().unwrap_or("").to_string();
+        let text = result["text"].as_str().unwrap_or("").to_string();
 
         // Close the page
         page.close()
@@ -163,15 +157,14 @@ impl Scraper for ChromeScraper {
                 let extractor = ContentExtractor::new(config.clone());
 
                 let result = async {
-                    let page = browser
-                        .new_page(&url)
-                        .await
-                        .map_err(|e| RivuletError::Scraper(format!("Failed to create page: {}", e)))?;
+                    let page = browser.new_page(&url).await.map_err(|e| {
+                        RivuletError::Scraper(format!("Failed to create page: {}", e))
+                    })?;
 
                     if let Some(ref ua) = config.user_agent {
-                        page.set_user_agent(ua)
-                            .await
-                            .map_err(|e| RivuletError::Scraper(format!("Failed to set user agent: {}", e)))?;
+                        page.set_user_agent(ua).await.map_err(|e| {
+                            RivuletError::Scraper(format!("Failed to set user agent: {}", e))
+                        })?;
                     }
 
                     page.wait_for_navigation()
@@ -184,9 +177,13 @@ impl Scraper for ChromeScraper {
                     let result: serde_json::Value = page
                         .evaluate(script)
                         .await
-                        .map_err(|e| RivuletError::Scraper(format!("Script execution failed: {}", e)))?
+                        .map_err(|e| {
+                            RivuletError::Scraper(format!("Script execution failed: {}", e))
+                        })?
                         .into_value()
-                        .map_err(|e| RivuletError::Scraper(format!("Failed to parse result: {:?}", e)))?;
+                        .map_err(|e| {
+                            RivuletError::Scraper(format!("Failed to parse result: {:?}", e))
+                        })?;
 
                     let html = result["html"].as_str().unwrap_or("").to_string();
                     let text = result["text"].as_str().unwrap_or("").to_string();

@@ -103,8 +103,9 @@ pub struct KeyBinding {
 impl KeyBinding {
     /// Check if this binding matches a key event.
     pub fn matches(&self, key: &KeyEvent) -> bool {
-        self.code == key.code && self.modifiers == (key.modifiers & !KeyModifiers::SHIFT)
-            || (self.code == key.code && self.modifiers == key.modifiers)
+        self.code == key.code
+            && (self.modifiers == key.modifiers
+                || self.modifiers == (key.modifiers & !KeyModifiers::SHIFT))
     }
 }
 

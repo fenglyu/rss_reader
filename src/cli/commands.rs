@@ -145,12 +145,18 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
             }
         }
         if !items_to_scrape.is_empty() {
-            println!("Queuing {} items for background content scraping...", items_to_scrape.len());
+            println!(
+                "Queuing {} items for background content scraping...",
+                items_to_scrape.len()
+            );
             ctx.queue_for_scraping(items_to_scrape).await;
         }
     }
 
-    println!("Update complete: {} new items, {} errors", total_new, errors);
+    println!(
+        "Update complete: {} new items, {} errors",
+        total_new, errors
+    );
     Ok(())
 }
 
@@ -284,7 +290,10 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
             }
         }
         if !items_to_scrape.is_empty() {
-            println!("Queuing {} items for background content scraping...", items_to_scrape.len());
+            println!(
+                "Queuing {} items for background content scraping...",
+                items_to_scrape.len()
+            );
             ctx.queue_for_scraping(items_to_scrape).await;
         }
     }
@@ -304,9 +313,10 @@ fn parse_opml(content: &str) -> Result<Vec<(String, String)>> {
     // Simple regex-free parsing: find all outline elements with xmlUrl
     for line in content.lines() {
         if line.contains("xmlUrl") {
-            if let (Some(title), Some(url)) = (extract_attr(line, "title")
-                .or_else(|| extract_attr(line, "text")), extract_attr(line, "xmlUrl"))
-            {
+            if let (Some(title), Some(url)) = (
+                extract_attr(line, "title").or_else(|| extract_attr(line, "text")),
+                extract_attr(line, "xmlUrl"),
+            ) {
                 feeds.push((title, url));
             }
         }
@@ -347,7 +357,7 @@ pub async fn scrape_content(
     // Filter items that need scraping (have link but no/short content)
     let items_to_scrape: Vec<_> = items
         .into_iter()
-        .filter(|item| ChromeScraper::needs_scraping(item))
+        .filter(ChromeScraper::needs_scraping)
         .take(limit)
         .collect();
 
@@ -385,8 +395,13 @@ pub async fn scrape_content(
         match result {
             Ok(scrape_result) => {
                 // Update item content in store
-                ctx.store.update_item_content(&item_id, &scrape_result.content)?;
-                let content_type = if scrape_result.is_html { "HTML" } else { "text" };
+                ctx.store
+                    .update_item_content(&item_id, &scrape_result.content)?;
+                let content_type = if scrape_result.is_html {
+                    "HTML"
+                } else {
+                    "text"
+                };
                 println!(
                     "  + {} ({}, {} chars)",
                     title,

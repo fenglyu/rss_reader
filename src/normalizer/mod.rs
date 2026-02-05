@@ -25,22 +25,28 @@ impl Normalizer {
         Self
     }
 
-    pub fn normalize(&self, feed_id: i64, feed_url: &str, body: &[u8]) -> Result<(FeedMeta, Vec<Item>)> {
-        let feed = parser::parse(body)
-            .map_err(|e| RivuletError::FeedParse(e.to_string()))?;
+    pub fn normalize(
+        &self,
+        feed_id: i64,
+        feed_url: &str,
+        body: &[u8],
+    ) -> Result<(FeedMeta, Vec<Item>)> {
+        let feed = parser::parse(body).map_err(|e| RivuletError::FeedParse(e.to_string()))?;
 
         let meta = FeedMeta {
-            title: feed.title.map(|t| decode_html_entities(&t.content).to_string()),
-            description: feed.description.map(|d| decode_html_entities(&d.content).to_string()),
+            title: feed
+                .title
+                .map(|t| decode_html_entities(&t.content).to_string()),
+            description: feed
+                .description
+                .map(|d| decode_html_entities(&d.content).to_string()),
         };
 
         let items: Vec<Item> = feed
             .entries
             .into_iter()
             .map(|entry| {
-                let entry_id = entry
-                    .id
-                    .clone();
+                let entry_id = entry.id.clone();
                 let link = entry.links.first().map(|l| l.href.clone());
                 let entry_id_for_hash = if entry_id.is_empty() {
                     link.clone().unwrap_or_default()
@@ -50,10 +56,17 @@ impl Normalizer {
 
                 let mut item = Item::new(feed_id, feed_url, &entry_id_for_hash);
 
-                item.title = entry.title.map(|t| decode_html_entities(&t.content).to_string());
+                item.title = entry
+                    .title
+                    .map(|t| decode_html_entities(&t.content).to_string());
                 item.link = link;
-                item.content = entry.content.and_then(|c| c.body).map(|b| decode_html_entities(&b).to_string());
-                item.summary = entry.summary.map(|s| decode_html_entities(&s.content).to_string());
+                item.content = entry
+                    .content
+                    .and_then(|c| c.body)
+                    .map(|b| decode_html_entities(&b).to_string());
+                item.summary = entry
+                    .summary
+                    .map(|s| decode_html_entities(&s.content).to_string());
                 item.author = entry.authors.first().map(|a| a.name.clone());
                 item.published_at = entry
                     .published

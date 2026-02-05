@@ -15,8 +15,8 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp, colors: &ColorConfig) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),    // Preview pane (full height)
-                Constraint::Length(1),  // Status bar
+                Constraint::Min(10),   // Preview pane (full height)
+                Constraint::Length(1), // Status bar
             ])
             .split(frame.area());
 
@@ -27,10 +27,10 @@ pub fn render(frame: &mut Frame, app: &mut TuiApp, colors: &ColorConfig) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(10), // Feeds pane
+                Constraint::Length(10),     // Feeds pane
                 Constraint::Percentage(40), // Items pane
-                Constraint::Min(10),    // Preview pane
-                Constraint::Length(1),  // Status bar
+                Constraint::Min(10),        // Preview pane
+                Constraint::Length(1),      // Status bar
             ])
             .split(frame.area());
 
@@ -131,7 +131,9 @@ fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
             let content = format!("{} {} {}", marker, date, item.display_title());
 
             let style = if !is_read {
-                Style::default().fg(colors.unread_item).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(colors.unread_item)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(colors.read_item)
             };
@@ -210,7 +212,9 @@ fn render_preview_pane(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &Col
             )));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from("─".repeat(area.width.saturating_sub(2) as usize)));
+        lines.push(Line::from(
+            "─".repeat(area.width.saturating_sub(2) as usize),
+        ));
         lines.push(Line::from(""));
 
         // Content
@@ -247,10 +251,12 @@ fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &Color
     } else if app.maximized {
         "j/k:Scroll  n/p:Page  m:Exit maximize  q:Quit".to_string()
     } else {
-        "j/k:Nav  n/p:Page  Tab:Pane  r:Read  s:Star  o:Open  R:Refresh  d:Delete  m:Max  q:Quit".to_string()
+        "j/k:Nav  n/p:Page  Tab:Pane  r:Read  s:Star  o:Open  R:Refresh  d:Delete  m:Max  q:Quit"
+            .to_string()
     };
 
-    let paragraph = Paragraph::new(status).style(Style::default().fg(colors.status_fg).bg(colors.status_bg));
+    let paragraph =
+        Paragraph::new(status).style(Style::default().fg(colors.status_fg).bg(colors.status_bg));
 
     frame.render_widget(paragraph, area);
 }

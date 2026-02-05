@@ -16,22 +16,12 @@ use std::io::Write;
 use std::path::PathBuf;
 
 /// Main configuration struct.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub colors: ColorConfig,
     pub keybindings: KeybindingConfig,
     pub scraper: ScraperConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            colors: ColorConfig::default(),
-            keybindings: KeybindingConfig::default(),
-            scraper: ScraperConfig::default(),
-        }
-    }
 }
 
 impl Config {
