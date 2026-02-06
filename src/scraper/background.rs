@@ -139,17 +139,34 @@ impl<S: Store + Send + Sync + 'static> BackgroundScraper<S> {
     }
 
     /// Check if an item needs scraping based on config
+    ///
+    /// Only scrape items that have a link but lack both meaningful content
+    /// and meaningful summary (i.e., items that only have a title).
     fn needs_scraping(&self, item: &Item) -> bool {
         // Must have a link
         if item.link.is_none() {
             return false;
         }
 
-        // Check if content is missing or too short
-        match &item.content {
-            None => true,
-            Some(content) => content.len() < self.config.min_content_length,
+        // Already has substantial content
+        if item
+            .content
+            .as_ref()
+            .is_some_and(|c| c.len() >= self.config.min_content_length)
+        {
+            return false;
         }
+
+        // Already has substantial summary
+        if item
+            .summary
+            .as_ref()
+            .is_some_and(|s| s.len() >= self.config.min_content_length)
+        {
+            return false;
+        }
+
+        true
     }
 }
 

@@ -73,8 +73,22 @@ pub trait Scraper: Send + Sync {
 
     /// Check if an item needs content scraping
     ///
-    /// Returns true if the item has a link but no meaningful content
+    /// Returns true if the item has a link but no meaningful content or summary
     fn needs_scraping(item: &Item) -> bool {
-        item.link.is_some() && item.content.as_ref().map(|c| c.len() < 200).unwrap_or(true)
+        if item.link.is_none() {
+            return false;
+        }
+
+        // Already has substantial content
+        if item.content.as_ref().is_some_and(|c| c.len() >= 200) {
+            return false;
+        }
+
+        // Already has substantial summary
+        if item.summary.as_ref().is_some_and(|s| s.len() >= 200) {
+            return false;
+        }
+
+        true
     }
 }
