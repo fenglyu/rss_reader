@@ -22,10 +22,14 @@ pub struct ChromeScraper {
 impl ChromeScraper {
     /// Create a new Chrome scraper with the given configuration
     pub async fn new(config: ScraperConfig) -> Result<Self> {
-        let mut builder = BrowserConfig::builder();
+        let mut builder = BrowserConfig::builder()
+            .arg("--no-sandbox")
+            .arg("--disable-gpu")
+            .arg("--disable-dev-shm-usage")
+            .arg("--disable-software-rasterizer");
 
-        if config.headless {
-            builder = builder.arg("--headless");
+        if !config.headless {
+            builder = builder.with_head();
         }
 
         let browser_config = builder
@@ -34,7 +38,10 @@ impl ChromeScraper {
 
         let (browser, mut handler) = Browser::launch(browser_config)
             .await
-            .map_err(|e| RivuletError::Scraper(format!("Failed to launch browser: {}", e)))?;
+            .map_err(|e| RivuletError::Scraper(format!(
+                "Failed to launch browser: {}. Is Chrome or Chromium installed and in PATH?",
+                e
+            )))?;
 
         // Spawn the browser handler
         tokio::spawn(async move {

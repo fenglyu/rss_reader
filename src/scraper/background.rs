@@ -61,6 +61,7 @@ impl<S: Store + Send + Sync + 'static> BackgroundScraper<S> {
 
         // Lazy initialization of browser - only when needed
         let mut scraper: Option<ChromeScraper> = None;
+        let mut init_failed = false;
 
         while let Some(msg) = self.rx.recv().await {
             match msg {
@@ -75,18 +76,31 @@ impl<S: Store + Send + Sync + 'static> BackgroundScraper<S> {
                         continue;
                     }
 
-                    info!("Scraping {} items in background", items_to_scrape.len());
-
                     // Initialize scraper lazily
                     if scraper.is_none() {
+                        if init_failed {
+                            // Already failed once, don't retry
+                            continue;
+                        }
                         match ChromeScraper::new(self.config.clone()).await {
-                            Ok(s) => scraper = Some(s),
+                            Ok(s) => {
+                                info!("Browser initialized successfully");
+                                scraper = Some(s);
+                            }
                             Err(e) => {
-                                error!("Failed to initialize scraper: {}", e);
+                                warn!(
+                                    "Scraper disabled: {}. \
+                                     Install Chrome or Chromium to enable content scraping, \
+                                     or set [scraper] enabled = false in config.",
+                                    e
+                                );
+                                init_failed = true;
                                 continue;
                             }
                         }
                     }
+
+                    info!("Scraping {} items in background", items_to_scrape.len());
 
                     if let Some(ref s) = scraper {
                         let results = s
