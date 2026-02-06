@@ -137,11 +137,13 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
     }
 
     // Queue items from updated feeds for background scraping
+    // Only queue items that actually need scraping (no content and no summary)
     if ctx.scraper_handle.is_some() && !updated_feed_ids.is_empty() {
         let mut items_to_scrape = Vec::new();
         for feed_id in updated_feed_ids {
             if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
-                items_to_scrape.extend(items);
+                items_to_scrape
+                    .extend(items.into_iter().filter(|i| ChromeScraper::needs_scraping(i)));
             }
         }
         if !items_to_scrape.is_empty() {
@@ -282,11 +284,13 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
     }
 
     // Queue items from imported feeds for background scraping
+    // Only queue items that actually need scraping (no content and no summary)
     if ctx.scraper_handle.is_some() && !imported_feed_ids.is_empty() {
         let mut items_to_scrape = Vec::new();
         for feed_id in imported_feed_ids {
             if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
-                items_to_scrape.extend(items);
+                items_to_scrape
+                    .extend(items.into_iter().filter(|i| ChromeScraper::needs_scraping(i)));
             }
         }
         if !items_to_scrape.is_empty() {

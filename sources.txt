@@ -1,0 +1,6 @@
+
+
+https://lwn.net/headlines/newrss
+https://news.ycombinator.com/rss
+http://feeds.reuters.com/Reuters/worldNews
+http://feeds.bbci.co.uk/news/video_and_audio/news_front_page/rss.xml?edition=uk
