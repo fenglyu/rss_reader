@@ -616,4 +616,258 @@ mod tests {
 
         assert_eq!(store.get_unread_count(feed_id).unwrap(), 3);
     }
+
+    #[test]
+    fn test_get_feed_by_url() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        store.add_feed(&feed).unwrap();
+
+        let found = store
+            .get_feed_by_url("https://example.com/feed.xml")
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().url, "https://example.com/feed.xml");
+
+        let missing = store
+            .get_feed_by_url("https://example.com/nonexistent.xml")
+            .unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_get_all_feeds_ordering() {
+        let store = SqliteStore::in_memory().unwrap();
+
+        let feed_c = Feed::new("https://example.com/c.xml".into());
+        let feed_a = Feed::new("https://example.com/a.xml".into());
+        let feed_b = Feed::new("https://example.com/b.xml".into());
+
+        store.add_feed(&feed_c).unwrap();
+        store.add_feed(&feed_a).unwrap();
+        store.add_feed(&feed_b).unwrap();
+
+        // With no titles set, should be ordered by URL
+        let feeds = store.get_all_feeds().unwrap();
+        assert_eq!(feeds.len(), 3);
+        assert_eq!(feeds[0].url, "https://example.com/a.xml");
+        assert_eq!(feeds[1].url, "https://example.com/b.xml");
+        assert_eq!(feeds[2].url, "https://example.com/c.xml");
+    }
+
+    #[test]
+    fn test_update_feed() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let id = store.add_feed(&feed).unwrap();
+
+        let update = FeedUpdate {
+            title: Some("Updated Title".into()),
+            description: Some("Updated Description".into()),
+            etag: Some("\"abc123\"".into()),
+            last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".into()),
+            last_fetched_at: None,
+        };
+        store.update_feed(id, &update).unwrap();
+
+        let retrieved = store.get_feed(id).unwrap().unwrap();
+        assert_eq!(retrieved.title, Some("Updated Title".into()));
+        assert_eq!(retrieved.description, Some("Updated Description".into()));
+        assert_eq!(retrieved.etag, Some("\"abc123\"".into()));
+        assert_eq!(
+            retrieved.last_modified,
+            Some("Mon, 01 Jan 2024 00:00:00 GMT".into())
+        );
+    }
+
+    #[test]
+    fn test_update_feed_partial() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let id = store.add_feed(&feed).unwrap();
+
+        // Only update title, leave everything else as None
+        let update = FeedUpdate {
+            title: Some("New Title".into()),
+            ..Default::default()
+        };
+        store.update_feed(id, &update).unwrap();
+
+        let retrieved = store.get_feed(id).unwrap().unwrap();
+        assert_eq!(retrieved.title, Some("New Title".into()));
+        assert_eq!(retrieved.description, None);
+        assert_eq!(retrieved.etag, None);
+    }
+
+    #[test]
+    fn test_delete_feed_cascades_items() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let item = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        let item_id = item.id.clone();
+        store.add_item(&item).unwrap();
+
+        assert!(store.item_exists(&item_id).unwrap());
+
+        store.delete_feed(feed_id).unwrap();
+
+        assert!(store.get_feed(feed_id).unwrap().is_none());
+        assert!(!store.item_exists(&item_id).unwrap());
+    }
+
+    #[test]
+    fn test_add_items_batch_and_dedup() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let items: Vec<Item> = (0..3)
+            .map(|i| {
+                Item::new(
+                    feed_id,
+                    "https://example.com/feed.xml",
+                    &format!("entry-{}", i),
+                )
+            })
+            .collect();
+
+        let count = store.add_items(&items).unwrap();
+        assert_eq!(count, 3);
+
+        // Duplicate batch: INSERT OR IGNORE means 0 new rows
+        let count = store.add_items(&items).unwrap();
+        assert_eq!(count, 0);
+
+        let stored = store.get_items_by_feed(feed_id).unwrap();
+        assert_eq!(stored.len(), 3);
+    }
+
+    #[test]
+    fn test_add_duplicate_item_ignored() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let mut item = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        item.title = Some("Original Title".into());
+        store.add_item(&item).unwrap();
+
+        // Same ID with different title — should be ignored
+        let mut dup = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        dup.title = Some("Different Title".into());
+        store.add_item(&dup).unwrap();
+
+        let retrieved = store.get_item(&item.id).unwrap().unwrap();
+        assert_eq!(retrieved.title, Some("Original Title".into()));
+    }
+
+    #[test]
+    fn test_item_exists() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let item = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        let item_id = item.id.clone();
+
+        assert!(!store.item_exists(&item_id).unwrap());
+        store.add_item(&item).unwrap();
+        assert!(store.item_exists(&item_id).unwrap());
+    }
+
+    #[test]
+    fn test_set_starred() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let item = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        store.add_item(&item).unwrap();
+
+        store.set_starred(&item.id, true).unwrap();
+        let state = store.get_item_state(&item.id).unwrap().unwrap();
+        assert!(state.is_starred);
+        assert!(state.starred_at.is_some());
+
+        store.set_starred(&item.id, false).unwrap();
+        let state = store.get_item_state(&item.id).unwrap().unwrap();
+        assert!(!state.is_starred);
+        assert!(state.starred_at.is_none());
+    }
+
+    #[test]
+    fn test_update_item_content() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let item = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        let item_id = item.id.clone();
+        store.add_item(&item).unwrap();
+
+        let retrieved = store.get_item(&item_id).unwrap().unwrap();
+        assert_eq!(retrieved.content, None);
+
+        store
+            .update_item_content(&item_id, "<p>Full article content</p>")
+            .unwrap();
+
+        let retrieved = store.get_item(&item_id).unwrap().unwrap();
+        assert_eq!(
+            retrieved.content,
+            Some("<p>Full article content</p>".into())
+        );
+    }
+
+    #[test]
+    fn test_get_all_items_across_feeds() {
+        let store = SqliteStore::in_memory().unwrap();
+
+        let feed1 = Feed::new("https://example.com/feed1.xml".into());
+        let feed1_id = store.add_feed(&feed1).unwrap();
+        let feed2 = Feed::new("https://example.com/feed2.xml".into());
+        let feed2_id = store.add_feed(&feed2).unwrap();
+
+        store
+            .add_item(&Item::new(
+                feed1_id,
+                "https://example.com/feed1.xml",
+                "e1",
+            ))
+            .unwrap();
+        store
+            .add_item(&Item::new(
+                feed2_id,
+                "https://example.com/feed2.xml",
+                "e2",
+            ))
+            .unwrap();
+
+        let all = store.get_all_items().unwrap();
+        assert_eq!(all.len(), 2);
+
+        let feed_ids: Vec<i64> = all.iter().map(|i| i.feed_id).collect();
+        assert!(feed_ids.contains(&feed1_id));
+        assert!(feed_ids.contains(&feed2_id));
+    }
+
+    #[test]
+    fn test_get_feed_nonexistent() {
+        let store = SqliteStore::in_memory().unwrap();
+        assert!(store.get_feed(999).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_item_nonexistent() {
+        let store = SqliteStore::in_memory().unwrap();
+        assert!(store.get_item("nonexistent-id").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_item_state_nonexistent() {
+        let store = SqliteStore::in_memory().unwrap();
+        assert!(store.get_item_state("nonexistent-id").unwrap().is_none());
+    }
 }

@@ -123,3 +123,61 @@ impl ScraperConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_values() {
+        let config = ScraperConfig::default();
+        assert!(config.enabled);
+        assert!(config.headless);
+        assert_eq!(config.min_content_length, 200);
+        assert_eq!(config.timeout_secs, 30);
+        assert_eq!(config.wait_after_load_ms, 1000);
+        assert_eq!(config.max_concurrency, 5);
+        assert!(config.block_images);
+        assert!(config.block_stylesheets);
+        assert!(!config.content_selectors.is_empty());
+        assert!(!config.remove_selectors.is_empty());
+    }
+
+    #[test]
+    fn test_fast_config() {
+        let config = ScraperConfig::fast();
+        assert_eq!(config.timeout_secs, 15);
+        assert_eq!(config.wait_after_load_ms, 500);
+        assert_eq!(config.max_concurrency, 10);
+        // Inherits defaults for the rest
+        assert!(config.block_images);
+    }
+
+    #[test]
+    fn test_thorough_config() {
+        let config = ScraperConfig::thorough();
+        assert_eq!(config.timeout_secs, 60);
+        assert_eq!(config.wait_after_load_ms, 2000);
+        assert_eq!(config.max_concurrency, 3);
+        assert!(!config.block_images);
+        assert!(!config.block_stylesheets);
+    }
+
+    #[test]
+    fn test_timeout_duration() {
+        let config = ScraperConfig::default();
+        assert_eq!(config.timeout(), Duration::from_secs(30));
+
+        let fast = ScraperConfig::fast();
+        assert_eq!(fast.timeout(), Duration::from_secs(15));
+    }
+
+    #[test]
+    fn test_wait_after_load_duration() {
+        let config = ScraperConfig::default();
+        assert_eq!(config.wait_after_load(), Duration::from_millis(1000));
+
+        let thorough = ScraperConfig::thorough();
+        assert_eq!(thorough.wait_after_load(), Duration::from_millis(2000));
+    }
+}

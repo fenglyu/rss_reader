@@ -428,3 +428,96 @@ pub async fn scrape_content(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_opml_basic() {
+        let opml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline text="Tech" title="Tech">
+      <outline title="Hacker News" text="HN" xmlUrl="https://news.ycombinator.com/rss" htmlUrl="https://news.ycombinator.com"/>
+      <outline title="Lobsters" text="Lobsters" xmlUrl="https://lobste.rs/rss" htmlUrl="https://lobste.rs"/>
+    </outline>
+  </body>
+</opml>"#;
+        let feeds = parse_opml(opml).unwrap();
+        assert_eq!(feeds.len(), 2);
+        assert_eq!(feeds[0].0, "Hacker News");
+        assert_eq!(feeds[0].1, "https://news.ycombinator.com/rss");
+        assert_eq!(feeds[1].0, "Lobsters");
+        assert_eq!(feeds[1].1, "https://lobste.rs/rss");
+    }
+
+    #[test]
+    fn test_parse_opml_text_fallback() {
+        let opml = r#"<opml version="2.0">
+  <body>
+    <outline text="My Blog" xmlUrl="https://example.com/feed.xml"/>
+  </body>
+</opml>"#;
+        let feeds = parse_opml(opml).unwrap();
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0].0, "My Blog");
+    }
+
+    #[test]
+    fn test_parse_opml_html_entities() {
+        let opml = r#"<opml version="2.0">
+  <body>
+    <outline title="Tom &amp; Jerry&apos;s Blog" xmlUrl="https://example.com/feed.xml"/>
+  </body>
+</opml>"#;
+        let feeds = parse_opml(opml).unwrap();
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0].0, "Tom & Jerry's Blog");
+    }
+
+    #[test]
+    fn test_parse_opml_empty() {
+        let opml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline text="Category" title="Category"/>
+  </body>
+</opml>"#;
+        let feeds = parse_opml(opml).unwrap();
+        assert!(feeds.is_empty());
+    }
+
+    #[test]
+    fn test_parse_opml_no_title_no_text() {
+        let opml = r#"<opml version="2.0">
+  <body>
+    <outline xmlUrl="https://example.com/feed.xml"/>
+  </body>
+</opml>"#;
+        let feeds = parse_opml(opml).unwrap();
+        assert!(feeds.is_empty());
+    }
+
+    #[test]
+    fn test_extract_attr_basic() {
+        let line = r#"<outline title="My Feed" xmlUrl="https://example.com/rss"/>"#;
+        assert_eq!(extract_attr(line, "title"), Some("My Feed".to_string()));
+        assert_eq!(
+            extract_attr(line, "xmlUrl"),
+            Some("https://example.com/rss".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_attr_missing() {
+        let line = r#"<outline title="My Feed"/>"#;
+        assert_eq!(extract_attr(line, "xmlUrl"), None);
+    }
+
+    #[test]
+    fn test_extract_attr_html_entities() {
+        let line = r#"<outline title="A &amp; B"/>"#;
+        assert_eq!(extract_attr(line, "title"), Some("A & B".to_string()));
+    }
+}

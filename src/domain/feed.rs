@@ -40,3 +40,21 @@ pub struct FeedUpdate {
     pub last_modified: Option<String>,
     pub last_fetched_at: Option<DateTime<Utc>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_title_with_title() {
+        let mut feed = Feed::new("https://example.com/feed.xml".into());
+        feed.title = Some("My Feed".into());
+        assert_eq!(feed.display_title(), "My Feed");
+    }
+
+    #[test]
+    fn test_display_title_falls_back_to_url() {
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        assert_eq!(feed.display_title(), "https://example.com/feed.xml");
+    }
+}

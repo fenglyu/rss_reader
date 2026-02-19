@@ -92,3 +92,45 @@ pub trait Scraper: Send + Sync {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_needs_scraping_no_link() {
+        let item = Item::new(1, "https://example.com/feed.xml", "e1");
+        assert!(!ChromeScraper::needs_scraping(&item));
+    }
+
+    #[test]
+    fn test_needs_scraping_with_link_no_content() {
+        let mut item = Item::new(1, "https://example.com/feed.xml", "e1");
+        item.link = Some("https://example.com/article".into());
+        assert!(ChromeScraper::needs_scraping(&item));
+    }
+
+    #[test]
+    fn test_needs_scraping_with_substantial_content() {
+        let mut item = Item::new(1, "https://example.com/feed.xml", "e1");
+        item.link = Some("https://example.com/article".into());
+        item.content = Some("x".repeat(200));
+        assert!(!ChromeScraper::needs_scraping(&item));
+    }
+
+    #[test]
+    fn test_needs_scraping_with_short_content() {
+        let mut item = Item::new(1, "https://example.com/feed.xml", "e1");
+        item.link = Some("https://example.com/article".into());
+        item.content = Some("short".into());
+        assert!(ChromeScraper::needs_scraping(&item));
+    }
+
+    #[test]
+    fn test_needs_scraping_with_substantial_summary() {
+        let mut item = Item::new(1, "https://example.com/feed.xml", "e1");
+        item.link = Some("https://example.com/article".into());
+        item.summary = Some("s".repeat(200));
+        assert!(!ChromeScraper::needs_scraping(&item));
+    }
+}
