@@ -159,4 +159,104 @@ mod tests {
         assert_eq!(items1[0].id, items2[0].id);
         assert_eq!(items1[1].id, items2[1].id);
     }
+
+    #[test]
+    fn test_parse_invalid_feed() {
+        let normalizer = Normalizer::new();
+        let result = normalizer.normalize(1, "https://example.com/feed.xml", b"not a feed");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_rss_missing_fields() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid>item-no-title</guid>
+    </item>
+  </channel>
+</rss>"#;
+        let normalizer = Normalizer::new();
+        let (meta, items) = normalizer
+            .normalize(1, "https://example.com/feed.xml", xml.as_bytes())
+            .unwrap();
+
+        assert_eq!(meta.title, None);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, None);
+        assert_eq!(items[0].link, None);
+    }
+
+    #[test]
+    fn test_parse_rss_html_entities_in_title() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Tom &amp; Jerry</title>
+    <item>
+      <title>Episode &lt;1&gt;</title>
+      <guid>ep-1</guid>
+    </item>
+  </channel>
+</rss>"#;
+        let normalizer = Normalizer::new();
+        let (meta, items) = normalizer
+            .normalize(1, "https://example.com/feed.xml", xml.as_bytes())
+            .unwrap();
+
+        assert_eq!(meta.title, Some("Tom & Jerry".into()));
+        assert_eq!(items[0].title, Some("Episode <1>".into()));
+    }
+
+    #[test]
+    fn test_parse_entry_empty_id_uses_link() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>No GUID Item</title>
+      <link>https://example.com/article</link>
+    </item>
+  </channel>
+</rss>"#;
+        let normalizer = Normalizer::new();
+        let (_, items) = normalizer
+            .normalize(1, "https://example.com/feed.xml", xml.as_bytes())
+            .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id.len(), 64);
+        assert!(items[0].id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_normalize_preserves_author() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Author Test</title>
+  <entry>
+    <title>Post by Alice</title>
+    <id>post-1</id>
+    <author><name>Alice</name></author>
+    <updated>2024-01-01T00:00:00Z</updated>
+  </entry>
+</feed>"#;
+        let normalizer = Normalizer::new();
+        let (_, items) = normalizer
+            .normalize(1, "https://example.com/feed.atom", xml.as_bytes())
+            .unwrap();
+
+        assert_eq!(items[0].author, Some("Alice".into()));
+    }
+
+    #[test]
+    fn test_normalize_preserves_summary() {
+        let (_, items) = Normalizer::new()
+            .normalize(1, "https://example.com/feed.xml", RSS_SAMPLE.as_bytes())
+            .unwrap();
+
+        assert_eq!(items[0].summary, Some("This is item 1".into()));
+        assert_eq!(items[1].summary, Some("This is item 2".into()));
+    }
 }

@@ -109,4 +109,62 @@ mod tests {
         assert!(script.contains("contentSelectors"));
         assert!(script.contains("article"));
     }
+
+    #[test]
+    fn test_resource_blocking_script_both() {
+        let config = ScraperConfig {
+            block_images: true,
+            block_stylesheets: true,
+            ..Default::default()
+        };
+        let extractor = ContentExtractor::new(config);
+        let script = extractor.resource_blocking_script();
+
+        assert!(script.is_some());
+        let s = script.unwrap();
+        assert!(s.contains("'image'"));
+        assert!(s.contains("'stylesheet'"));
+        assert!(s.contains("'font'"));
+    }
+
+    #[test]
+    fn test_resource_blocking_script_none() {
+        let config = ScraperConfig {
+            block_images: false,
+            block_stylesheets: false,
+            ..Default::default()
+        };
+        let extractor = ContentExtractor::new(config);
+        assert!(extractor.resource_blocking_script().is_none());
+    }
+
+    #[test]
+    fn test_resource_blocking_script_images_only() {
+        let config = ScraperConfig {
+            block_images: true,
+            block_stylesheets: false,
+            ..Default::default()
+        };
+        let extractor = ContentExtractor::new(config);
+        let script = extractor.resource_blocking_script();
+
+        assert!(script.is_some());
+        let s = script.unwrap();
+        assert!(s.contains("'image'"));
+        assert!(!s.contains("'stylesheet'"));
+    }
+
+    #[test]
+    fn test_extraction_script_custom_selectors() {
+        let config = ScraperConfig {
+            content_selectors: vec![".my-custom-content".to_string()],
+            remove_selectors: vec![".my-ad".to_string()],
+            ..Default::default()
+        };
+        let extractor = ContentExtractor::new(config);
+        let script = extractor.extraction_script();
+
+        assert!(script.contains(".my-custom-content"));
+        assert!(script.contains(".my-ad"));
+    }
 }

@@ -78,4 +78,38 @@ mod tests {
         assert_eq!(id.len(), 64); // SHA256 produces 32 bytes = 64 hex chars
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
     }
+
+    #[test]
+    fn test_display_title_with_title() {
+        let mut item = Item::new(1, "https://example.com/feed.xml", "e1");
+        item.title = Some("My Article".into());
+        assert_eq!(item.display_title(), "My Article");
+    }
+
+    #[test]
+    fn test_display_title_without_title() {
+        let item = Item::new(1, "https://example.com/feed.xml", "e1");
+        assert_eq!(item.display_title(), "(Untitled)");
+    }
+
+    #[test]
+    fn test_display_content_prefers_content() {
+        let mut item = Item::new(1, "https://example.com/feed.xml", "e1");
+        item.content = Some("Full content".into());
+        item.summary = Some("Short summary".into());
+        assert_eq!(item.display_content(), "Full content");
+    }
+
+    #[test]
+    fn test_display_content_falls_back_to_summary() {
+        let mut item = Item::new(1, "https://example.com/feed.xml", "e1");
+        item.summary = Some("Short summary".into());
+        assert_eq!(item.display_content(), "Short summary");
+    }
+
+    #[test]
+    fn test_display_content_empty_when_neither() {
+        let item = Item::new(1, "https://example.com/feed.xml", "e1");
+        assert_eq!(item.display_content(), "");
+    }
 }
