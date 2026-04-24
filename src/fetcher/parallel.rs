@@ -8,7 +8,7 @@ use crate::fetcher::{FetchResult, Fetcher};
 use crate::normalizer::Normalizer;
 use crate::store::Store;
 
-pub const DEFAULT_WORKERS: usize = 10;
+pub const DEFAULT_WORKERS: usize = 30;
 
 pub struct ParallelFetcher {
     fetcher: Arc<dyn Fetcher + Send + Sync>,
@@ -32,7 +32,9 @@ impl ParallelFetcher {
         feeds: Vec<Feed>,
         store: Arc<S>,
         normalizer: &Normalizer,
+        progress_tx: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
     ) -> Vec<(i64, Result<usize>)> {
+        let total = feeds.len();
         let mut handles = Vec::new();
 
         for feed in feeds {
@@ -52,11 +54,22 @@ impl ParallelFetcher {
         }
 
         let mut results = Vec::new();
+        let mut current = 0;
         for handle in handles {
             match handle.await {
-                Ok(result) => results.push(result),
+                Ok(result) => {
+                    results.push(result);
+                    current += 1;
+                    if let Some(ref tx) = progress_tx {
+                        let _ = tx.send((current, total));
+                    }
+                }
                 Err(e) => {
                     tracing::error!("Task join error: {}", e);
+                    current += 1;
+                    if let Some(ref tx) = progress_tx {
+                        let _ = tx.send((current, total));
+                    }
                 }
             }
         }

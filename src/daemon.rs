@@ -267,7 +267,7 @@ impl Daemon {
                 let results = self
                     .ctx
                     .parallel_fetcher
-                    .fetch_all(feeds, self.ctx.store.clone(), &self.ctx.normalizer)
+                    .fetch_all(feeds, self.ctx.store.clone(), &self.ctx.normalizer, None)
                     .await;
 
                 let mut total_new = 0;

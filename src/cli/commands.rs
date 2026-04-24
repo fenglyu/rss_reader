@@ -110,7 +110,7 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
 
     let results = ctx
         .parallel_fetcher
-        .fetch_all(feeds.clone(), ctx.store.clone(), &ctx.normalizer)
+        .fetch_all(feeds.clone(), ctx.store.clone(), &ctx.normalizer, None)
         .await;
 
     let mut total_new = 0;
@@ -321,7 +321,7 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
     // Parallel fetch all new feeds
     let results = ctx
         .parallel_fetcher
-        .fetch_all(feeds_to_fetch.clone(), ctx.store.clone(), &ctx.normalizer)
+        .fetch_all(feeds_to_fetch.clone(), ctx.store.clone(), &ctx.normalizer, None)
         .await;
 
     let mut added = 0;

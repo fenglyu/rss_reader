@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -252,23 +252,47 @@ fn render_preview_pane(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &Col
 }
 
 fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &ColorConfig) {
-    let status = if let Some((_, ref title)) = app.pending_delete {
-        format!("Delete \"{}\"? (y/n)", title)
-    } else if app.is_refreshing {
-        "Refreshing feeds...".to_string()
-    } else if let Some(ref msg) = app.status_message {
-        msg.clone()
-    } else if app.maximized {
-        "j/k:Scroll  n/p:Page  m:Exit maximize  q:Quit".to_string()
+    if app.is_refreshing {
+        let (current, total) = app.refresh_progress;
+        let ratio = if total > 0 {
+            (current as f64 / total as f64).min(1.0)
+        } else {
+            0.0
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(30), Constraint::Length(30)])
+            .split(area);
+
+        let status = format!("Refreshing feeds... ({}/{})", current, total);
+        let paragraph = Paragraph::new(status)
+            .style(Style::default().fg(colors.status_fg).bg(colors.status_bg));
+        frame.render_widget(paragraph, chunks[0]);
+
+        let gauge = Gauge::default()
+            .style(Style::default().fg(colors.active_border).bg(colors.status_bg))
+            .ratio(ratio)
+            .label(format!("{}%", (ratio * 100.0) as u32))
+            .use_unicode(true);
+        frame.render_widget(gauge, chunks[1]);
     } else {
-        "j/k:Nav  a/u/f/l/v/X:Views  r:Read  s:Star  L:Queue  S:Save  x:Archive  o:Open  R:Refresh  q:Quit"
-            .to_string()
-    };
+        let status = if let Some((_, ref title)) = app.pending_delete {
+            format!("Delete \"{}\"? (y/n)", title)
+        } else if let Some(ref msg) = app.status_message {
+            msg.clone()
+        } else if app.maximized {
+            "j/k:Scroll  n/p:Page  m:Exit maximize  q:Quit".to_string()
+        } else {
+            "j/k:Nav  a/u/f/l/v/X:Views  r:Read  s:Star  L:Queue  S:Save  x:Archive  o:Open  R:Refresh  q:Quit"
+                .to_string()
+        };
 
-    let paragraph =
-        Paragraph::new(status).style(Style::default().fg(colors.status_fg).bg(colors.status_bg));
+        let paragraph = Paragraph::new(status)
+            .style(Style::default().fg(colors.status_fg).bg(colors.status_bg));
 
-    frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, area);
+    }
 }
 
 fn strip_html(html: &str) -> String {

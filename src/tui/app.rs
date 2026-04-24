@@ -76,6 +76,7 @@ pub struct TuiApp {
     pub should_quit: bool,
     pub status_message: Option<String>,
     pub is_refreshing: bool,
+    pub refresh_progress: (usize, usize),
     // Maximize mode
     pub maximized: bool,
     // List states for scrolling
@@ -104,6 +105,7 @@ impl TuiApp {
             should_quit: false,
             status_message: None,
             is_refreshing: false,
+            refresh_progress: (0, 0),
             maximized: false,
             feed_list_state,
             item_list_state,

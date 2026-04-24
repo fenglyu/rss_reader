@@ -48,7 +48,7 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
 
 async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) -> Result<()> {
     let mut tui_app = TuiApp::new();
-    let event_handler = EventHandler::new(Duration::from_millis(100));
+    let mut event_handler = EventHandler::new(Duration::from_millis(100));
 
     // Load initial data
     load_feeds(&mut tui_app, &ctx)?;
@@ -57,7 +57,12 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
     loop {
         terminal.draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
 
-        match event_handler.next()? {
+        let event = match event_handler.next().await {
+            Some(e) => e,
+            None => break,
+        };
+
+        match event {
             AppEvent::Key(key) => {
                 // Handle pending delete confirmation
                 if let Some((feed_id, feed_title)) = tui_app.pending_delete.take() {
@@ -183,48 +188,38 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         }
                     }
                     Action::Refresh => {
-                        tui_app.is_refreshing = true;
-                        terminal
-                            .draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
-
-                        let feeds = ctx.store.get_all_feeds()?;
-                        let results = ctx
-                            .parallel_fetcher
-                            .fetch_all(feeds.clone(), ctx.store.clone(), &ctx.normalizer)
-                            .await;
-
-                        let mut total_new = 0;
-                        let mut updated_feed_ids = Vec::new();
-                        for (feed_id, result) in results {
-                            if let Ok(count) = result {
-                                total_new += count;
-                                if count > 0 {
-                                    updated_feed_ids.push(feed_id);
+                        if !tui_app.is_refreshing {
+                            tui_app.is_refreshing = true;
+                            tui_app.refresh_progress = (0, 0);
+                            
+                            let tx = event_handler.get_tx();
+                            let ctx_clone = ctx.clone();
+                            
+                            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(usize, usize)>();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                while let Some((current, total)) = progress_rx.recv().await {
+                                    let _ = tx_clone.send(AppEvent::RefreshProgress(current, total));
                                 }
-                            }
+                            });
+                            
+                            tokio::spawn(async move {
+                                let feeds = match ctx_clone.store.get_all_feeds() {
+                                    Ok(f) => f,
+                                    Err(e) => {
+                                        tracing::error!("Failed to get feeds: {}", e);
+                                        return;
+                                    }
+                                };
+                                
+                                let results = ctx_clone
+                                    .parallel_fetcher
+                                    .fetch_all(feeds, ctx_clone.store.clone(), &ctx_clone.normalizer, Some(progress_tx))
+                                    .await;
+                                
+                                let _ = tx.send(AppEvent::RefreshComplete(results));
+                            });
                         }
-
-                        // Queue items for background scraping (non-blocking)
-                        // Only queue items that actually need scraping (no content and no summary)
-                        if ctx.scraper_handle.is_some() && !updated_feed_ids.is_empty() {
-                            let mut items_to_scrape = Vec::new();
-                            for feed_id in updated_feed_ids {
-                                if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
-                                    items_to_scrape.extend(
-                                        items.into_iter().filter(ChromeScraper::needs_scraping),
-                                    );
-                                }
-                            }
-                            if !items_to_scrape.is_empty() {
-                                ctx.queue_for_scraping(items_to_scrape).await;
-                            }
-                        }
-
-                        load_feeds(&mut tui_app, &ctx)?;
-                        load_current_items(&mut tui_app, &ctx)?;
-
-                        tui_app.is_refreshing = false;
-                        tui_app.set_status(format!("Refreshed: {} new items", total_new));
                     }
                     Action::DeleteFeed => {
                         if tui_app.active_pane == ActivePane::Feeds {
@@ -240,6 +235,45 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
             }
             AppEvent::Tick => {
                 // Clear status message after some time could be implemented here
+            }
+            AppEvent::RefreshProgress(current, total) => {
+                tui_app.refresh_progress = (current, total);
+            }
+            AppEvent::RefreshComplete(results) => {
+                let mut total_new = 0;
+                let mut updated_feed_ids = Vec::new();
+                for (feed_id, result) in results {
+                    if let Ok(count) = result {
+                        total_new += count;
+                        if count > 0 {
+                            updated_feed_ids.push(feed_id);
+                        }
+                    }
+                }
+
+                // Queue items for background scraping (non-blocking)
+                if ctx.scraper_handle.is_some() && !updated_feed_ids.is_empty() {
+                    let mut items_to_scrape = Vec::new();
+                    for feed_id in updated_feed_ids {
+                        if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
+                            items_to_scrape.extend(
+                                items.into_iter().filter(ChromeScraper::needs_scraping),
+                            );
+                        }
+                    }
+                    if !items_to_scrape.is_empty() {
+                        let ctx_clone = ctx.clone();
+                        tokio::spawn(async move {
+                            ctx_clone.queue_for_scraping(items_to_scrape).await;
+                        });
+                    }
+                }
+
+                load_feeds(&mut tui_app, &ctx)?;
+                load_current_items(&mut tui_app, &ctx)?;
+
+                tui_app.is_refreshing = false;
+                tui_app.set_status(format!("Refreshed: {} new items", total_new));
             }
         }
 
