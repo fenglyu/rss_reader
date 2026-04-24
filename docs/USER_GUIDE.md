@@ -178,6 +178,19 @@ RUST_LOG=rivulet=debug rivulet update
 RUST_LOG=rivulet=trace rivulet tui
 ```
 
+The TUI keeps stdout/stderr reserved for the terminal interface. TUI logs are
+written to the Rivulet data directory instead:
+
+- **macOS**: `~/Library/Application Support/rivulet/tui.log`
+- **Linux**: `~/.local/share/rivulet/tui.log`
+- **Windows**: `C:\Users\<user>\AppData\Roaming\rivulet\tui.log`
+
+Override the TUI log file path with `RIVULET_TUI_LOG`:
+
+```bash
+RIVULET_TUI_LOG=/tmp/rivulet-tui.log RUST_LOG=rivulet=trace,chromiumoxide=debug rivulet tui
+```
+
 ## Supported Feed Formats
 
 - RSS 0.9x, 1.0, 2.0

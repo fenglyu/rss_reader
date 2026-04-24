@@ -10,13 +10,8 @@ use rivulet::daemon::{Daemon, DaemonConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
+    init_tracing(&cli.command)?;
 
     // Load config for scraper settings
     let config = Config::load().unwrap_or_else(|e| {
@@ -215,4 +210,52 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn init_tracing(command: &Commands) -> anyhow::Result<()> {
+    if matches!(command, Commands::Tui) {
+        init_tui_tracing()
+    } else {
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(env_filter("rivulet=info"))
+            .init();
+        Ok(())
+    }
+}
+
+fn init_tui_tracing() -> anyhow::Result<()> {
+    let log_path = std::env::var_os("RIVULET_TUI_LOG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or(default_tui_log_path()?);
+
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
+    tracing_subscriber::registry()
+        .with(
+            fmt::layer()
+                .with_ansi(false)
+                .with_writer(move || file.try_clone().expect("failed to clone TUI log file")),
+        )
+        .with(env_filter("rivulet=debug,chromiumoxide=warn"))
+        .init();
+
+    Ok(())
+}
+
+fn default_tui_log_path() -> anyhow::Result<std::path::PathBuf> {
+    let data_dir =
+        dirs::data_dir().ok_or_else(|| anyhow::anyhow!("could not determine data directory"))?;
+    Ok(data_dir.join("rivulet").join("tui.log"))
+}
+
+fn env_filter(default_directive: &str) -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directive))
 }
