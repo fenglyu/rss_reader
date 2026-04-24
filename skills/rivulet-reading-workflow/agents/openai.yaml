@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rivulet Reading Workflow"
+  short_description: "Maintain Rivulet reading workflows."
+  default_prompt: "Use this workflow when changing Rivulet reading states, queue/save/archive behavior, list filters, or TUI reading interactions."

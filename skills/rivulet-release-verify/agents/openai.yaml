@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rivulet Release Verify"
+  short_description: "Verify, commit, and ship Rivulet changes."
+  default_prompt: "Use this workflow before finalizing Rivulet changes, preparing commits, pushing branches, or reporting verification evidence."

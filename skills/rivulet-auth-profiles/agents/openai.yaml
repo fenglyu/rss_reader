@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rivulet Auth Profiles"
+  short_description: "Manage Rivulet Chrome auth profiles."
+  default_prompt: "Use this workflow when changing Rivulet Chrome authentication profiles, paid-site scraping, cookie persistence, or scraper auth flows."

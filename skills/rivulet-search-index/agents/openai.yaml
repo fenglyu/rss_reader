@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rivulet Search Index"
+  short_description: "Maintain Rivulet search and FTS indexing."
+  default_prompt: "Use this workflow when changing Rivulet search, SQLite FTS, indexing, ranking, or search CLI behavior."
