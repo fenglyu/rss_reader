@@ -46,6 +46,55 @@ pub enum Commands {
         /// Show items instead of feeds
         #[arg(long)]
         items: bool,
+
+        /// Show unread items
+        #[arg(long)]
+        unread: bool,
+
+        /// Show starred items
+        #[arg(long)]
+        starred: bool,
+
+        /// Show queued/read-later items
+        #[arg(long)]
+        queued: bool,
+
+        /// Show saved items
+        #[arg(long)]
+        saved: bool,
+
+        /// Show archived items
+        #[arg(long)]
+        archived: bool,
+    },
+    /// Search locally indexed article titles, summaries, and scraped content
+    Search {
+        /// Search query
+        query: String,
+
+        /// Maximum number of results
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Search unread items
+        #[arg(long)]
+        unread: bool,
+
+        /// Search starred items
+        #[arg(long)]
+        starred: bool,
+
+        /// Search queued/read-later items
+        #[arg(long)]
+        queued: bool,
+
+        /// Search saved items
+        #[arg(long)]
+        saved: bool,
+
+        /// Search archived items
+        #[arg(long)]
+        archived: bool,
     },
     /// Launch the TUI
     Tui,
@@ -71,6 +120,15 @@ pub enum Commands {
         /// Run in non-headless mode (show browser)
         #[arg(long)]
         visible: bool,
+
+        /// Use a stored authenticated Chrome profile
+        #[arg(long)]
+        auth_profile: Option<String>,
+    },
+    /// Manage authenticated Chrome profiles for paid/private sites
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
     },
 }
 
@@ -98,4 +156,36 @@ pub enum DaemonAction {
     Stop,
     /// Check daemon status
     Status,
+}
+
+#[derive(Subcommand)]
+pub enum AuthAction {
+    /// Create/update a profile and open a visible Chrome login session
+    Add {
+        /// Profile name
+        name: String,
+
+        /// Site URL to open for login
+        #[arg(long)]
+        site: String,
+
+        /// Override profile directory; defaults under Rivulet's data dir
+        #[arg(long)]
+        profile_dir: Option<std::path::PathBuf>,
+    },
+    /// Open a URL with a stored profile and report whether content can be extracted
+    Check {
+        /// Profile name
+        name: String,
+
+        /// URL to check; defaults to the profile site URL
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Show browser while checking
+        #[arg(long)]
+        visible: bool,
+    },
+    /// List configured auth profiles
+    List,
 }

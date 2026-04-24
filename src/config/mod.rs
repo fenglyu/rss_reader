@@ -138,6 +138,15 @@ prev_pane = ["BackTab", "Shift+Tab"]
 select = ["Enter"]
 toggle_read = ["r"]
 toggle_star = ["s"]
+toggle_queued = ["L"]
+toggle_saved = ["S"]
+toggle_archived = ["x"]
+view_all = ["a"]
+view_unread = ["u"]
+view_starred = ["f"]
+view_queued = ["l"]
+view_saved = ["v"]
+view_archived = ["X"]
 open_in_browser = ["o"]
 refresh = ["R"]
 toggle_maximize = ["m"]
@@ -191,6 +200,11 @@ remove_selectors = [
     "script",
     "style",
 ]
+
+# Optional: Persistent Chrome profile directory used for authenticated scraping.
+# Prefer `rivulet auth add <name> --site <url>` and `rivulet scrape --auth-profile <name>`
+# for named paid/private-site sessions.
+# user_data_dir = "/Users/you/Library/Application Support/rivulet/auth-profiles/example"
 "##
         .to_string()
     }

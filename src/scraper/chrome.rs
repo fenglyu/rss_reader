@@ -32,16 +32,20 @@ impl ChromeScraper {
             builder = builder.with_head();
         }
 
+        if let Some(ref user_data_dir) = config.user_data_dir {
+            builder = builder.user_data_dir(user_data_dir);
+        }
+
         let browser_config = builder
             .build()
             .map_err(|e| RivuletError::Scraper(format!("Failed to build browser config: {}", e)))?;
 
-        let (browser, mut handler) = Browser::launch(browser_config)
-            .await
-            .map_err(|e| RivuletError::Scraper(format!(
+        let (browser, mut handler) = Browser::launch(browser_config).await.map_err(|e| {
+            RivuletError::Scraper(format!(
                 "Failed to launch browser: {}. Is Chrome or Chromium installed and in PATH?",
                 e
-            )))?;
+            ))
+        })?;
 
         // Spawn the browser handler
         tokio::spawn(async move {
@@ -64,6 +68,27 @@ impl ChromeScraper {
     /// Create a new Chrome scraper with default configuration
     pub async fn with_defaults() -> Result<Self> {
         Self::new(ScraperConfig::default()).await
+    }
+
+    /// Open a page and leave it open for interactive login or inspection.
+    pub async fn open_interactive_page(&self, url: &str) -> Result<()> {
+        let page = self
+            .browser
+            .new_page(url)
+            .await
+            .map_err(|e| RivuletError::Scraper(format!("Failed to create page: {}", e)))?;
+
+        if let Some(ref ua) = self.config.user_agent {
+            page.set_user_agent(ua)
+                .await
+                .map_err(|e| RivuletError::Scraper(format!("Failed to set user agent: {}", e)))?;
+        }
+
+        page.wait_for_navigation()
+            .await
+            .map_err(|e| RivuletError::Scraper(format!("Navigation failed: {}", e)))?;
+
+        Ok(())
     }
 
     /// Scrape a single page and extract content

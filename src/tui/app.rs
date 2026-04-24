@@ -1,6 +1,7 @@
 use ratatui::widgets::ListState;
 
 use crate::domain::{Feed, Item, ItemState};
+use crate::store::ItemListFilter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivePane {
@@ -27,6 +28,40 @@ impl ActivePane {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemView {
+    All,
+    Unread,
+    Starred,
+    Queued,
+    Saved,
+    Archived,
+}
+
+impl ItemView {
+    pub fn filter(self) -> ItemListFilter {
+        match self {
+            ItemView::All => ItemListFilter::All,
+            ItemView::Unread => ItemListFilter::Unread,
+            ItemView::Starred => ItemListFilter::Starred,
+            ItemView::Queued => ItemListFilter::Queued,
+            ItemView::Saved => ItemListFilter::Saved,
+            ItemView::Archived => ItemListFilter::Archived,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ItemView::All => "All",
+            ItemView::Unread => "Unread",
+            ItemView::Starred => "Starred",
+            ItemView::Queued => "Queue",
+            ItemView::Saved => "Saved",
+            ItemView::Archived => "Archived",
+        }
+    }
+}
+
 pub const PAGE_SIZE: usize = 10;
 
 pub struct TuiApp {
@@ -36,6 +71,7 @@ pub struct TuiApp {
     pub item_states: std::collections::HashMap<String, ItemState>,
     pub feed_index: usize,
     pub item_index: usize,
+    pub item_view: ItemView,
     pub preview_scroll: u16,
     pub should_quit: bool,
     pub status_message: Option<String>,
@@ -63,6 +99,7 @@ impl TuiApp {
             item_states: std::collections::HashMap::new(),
             feed_index: 0,
             item_index: 0,
+            item_view: ItemView::All,
             preview_scroll: 0,
             should_quit: false,
             status_message: None,
@@ -93,6 +130,27 @@ impl TuiApp {
         self.item_states
             .get(item_id)
             .map(|s| s.is_starred)
+            .unwrap_or(false)
+    }
+
+    pub fn is_item_queued(&self, item_id: &str) -> bool {
+        self.item_states
+            .get(item_id)
+            .map(|s| s.is_queued)
+            .unwrap_or(false)
+    }
+
+    pub fn is_item_saved(&self, item_id: &str) -> bool {
+        self.item_states
+            .get(item_id)
+            .map(|s| s.is_saved)
+            .unwrap_or(false)
+    }
+
+    pub fn is_item_archived(&self, item_id: &str) -> bool {
+        self.item_states
+            .get(item_id)
+            .map(|s| s.is_archived)
             .unwrap_or(false)
     }
 

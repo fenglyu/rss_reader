@@ -1,12 +1,13 @@
 use std::path::Path;
+use std::path::PathBuf;
 
 use chrono::Utc;
 
 use crate::app::{AppContext, Result, RivuletError};
-use crate::domain::{Feed, FeedUpdate};
+use crate::domain::{AuthProfile, Feed, FeedUpdate};
 use crate::fetcher::FetchResult;
 use crate::scraper::{ChromeScraper, Scraper, ScraperConfig};
-use crate::store::Store;
+use crate::store::{ItemListFilter, Store};
 
 /// Initialize config file with all options
 pub fn init_config(force: bool) -> Result<()> {
@@ -142,8 +143,7 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
         let mut items_to_scrape = Vec::new();
         for feed_id in updated_feed_ids {
             if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
-                items_to_scrape
-                    .extend(items.into_iter().filter(|i| ChromeScraper::needs_scraping(i)));
+                items_to_scrape.extend(items.into_iter().filter(ChromeScraper::needs_scraping));
             }
         }
         if !items_to_scrape.is_empty() {
@@ -183,8 +183,39 @@ pub fn list_feeds(ctx: &AppContext) -> Result<()> {
     Ok(())
 }
 
-pub fn list_items(ctx: &AppContext) -> Result<()> {
-    let items = ctx.store.get_all_items()?;
+pub fn list_filter_from_flags(
+    unread: bool,
+    starred: bool,
+    queued: bool,
+    saved: bool,
+    archived: bool,
+) -> Result<Option<ItemListFilter>> {
+    let filters = [
+        (unread, ItemListFilter::Unread),
+        (starred, ItemListFilter::Starred),
+        (queued, ItemListFilter::Queued),
+        (saved, ItemListFilter::Saved),
+        (archived, ItemListFilter::Archived),
+    ];
+
+    let selected: Vec<ItemListFilter> = filters
+        .into_iter()
+        .filter_map(|(enabled, filter)| enabled.then_some(filter))
+        .collect();
+
+    match selected.as_slice() {
+        [] => Ok(None),
+        [filter] => Ok(Some(*filter)),
+        _ => Err(RivuletError::Config(
+            "Use only one item filter at a time".to_string(),
+        )),
+    }
+}
+
+pub fn list_items(ctx: &AppContext, filter: Option<ItemListFilter>) -> Result<()> {
+    let items = ctx
+        .store
+        .get_items_by_filter(filter.unwrap_or(ItemListFilter::All))?;
 
     if items.is_empty() {
         println!("No items");
@@ -192,21 +223,58 @@ pub fn list_items(ctx: &AppContext) -> Result<()> {
     }
 
     for item in items {
-        let state = ctx.store.get_item_state(&item.id)?;
-        let read_marker = if state.map(|s| s.is_read).unwrap_or(false) {
-            " "
-        } else {
-            "●"
-        };
-
-        let date = item
-            .published_at
-            .map(|d| d.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| "          ".to_string());
-
-        println!("{} {} {}", read_marker, date, item.display_title());
+        print_item_line(ctx, &item)?;
     }
 
+    Ok(())
+}
+
+pub fn search_items(
+    ctx: &AppContext,
+    query: &str,
+    filter: ItemListFilter,
+    limit: usize,
+) -> Result<()> {
+    let items = ctx.store.search_items(query, filter, limit)?;
+
+    if items.is_empty() {
+        println!("No search results");
+        return Ok(());
+    }
+
+    for item in items {
+        print_item_line(ctx, &item)?;
+    }
+
+    Ok(())
+}
+
+fn print_item_line(ctx: &AppContext, item: &crate::domain::Item) -> Result<()> {
+    let state = ctx.store.get_item_state(&item.id)?;
+    let marker = if let Some(state) = state {
+        if state.is_archived {
+            "x"
+        } else if state.is_saved {
+            "S"
+        } else if state.is_queued {
+            "Q"
+        } else if state.is_starred {
+            "*"
+        } else if state.is_read {
+            " "
+        } else {
+            "u"
+        }
+    } else {
+        "u"
+    };
+
+    let date = item
+        .published_at
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "          ".to_string());
+
+    println!("{} {} {}", marker, date, item.display_title());
     Ok(())
 }
 
@@ -289,8 +357,7 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
         let mut items_to_scrape = Vec::new();
         for feed_id in imported_feed_ids {
             if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
-                items_to_scrape
-                    .extend(items.into_iter().filter(|i| ChromeScraper::needs_scraping(i)));
+                items_to_scrape.extend(items.into_iter().filter(ChromeScraper::needs_scraping));
             }
         }
         if !items_to_scrape.is_empty() {
@@ -346,6 +413,7 @@ pub async fn scrape_content(
     limit: usize,
     concurrency: usize,
     visible: bool,
+    auth_profile: Option<&str>,
 ) -> Result<()> {
     // Get items to scrape
     let items = if let Some(url) = feed_url {
@@ -377,9 +445,20 @@ pub async fn scrape_content(
     );
 
     // Create scraper config
+    let user_data_dir = if let Some(name) = auth_profile {
+        let profile = ctx
+            .store
+            .get_auth_profile_by_name(name)?
+            .ok_or_else(|| RivuletError::Config(format!("Auth profile not found: {}", name)))?;
+        Some(PathBuf::from(profile.profile_dir))
+    } else {
+        None
+    };
+
     let config = ScraperConfig {
         headless: !visible,
         max_concurrency: concurrency,
+        user_data_dir,
         ..Default::default()
     };
 
@@ -427,6 +506,140 @@ pub async fn scrape_content(
     );
 
     Ok(())
+}
+
+pub async fn auth_add(
+    ctx: &AppContext,
+    name: &str,
+    site_url: &str,
+    profile_dir: Option<PathBuf>,
+) -> Result<()> {
+    let profile_dir = profile_dir.unwrap_or(default_auth_profile_dir(name)?);
+    std::fs::create_dir_all(&profile_dir)?;
+
+    let profile = AuthProfile::new(
+        name.to_string(),
+        site_url.to_string(),
+        profile_dir.to_string_lossy().to_string(),
+    );
+    let profile_id = ctx.store.add_auth_profile(&profile)?;
+
+    println!("Auth profile: {}", name);
+    println!("Site: {}", site_url);
+    println!("Chrome profile directory: {}", profile_dir.display());
+    println!(
+        "A visible Chrome window will open. Log in normally, then return here and press Enter."
+    );
+    println!(
+        "Rivulet stores profile metadata only; cookies remain inside Chrome's profile directory."
+    );
+
+    let mut config = ScraperConfig {
+        headless: false,
+        user_data_dir: Some(profile_dir),
+        block_images: false,
+        block_stylesheets: false,
+        ..Default::default()
+    };
+    config.enabled = false;
+
+    let scraper = ChromeScraper::new(config).await?;
+    scraper.open_interactive_page(site_url).await?;
+
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+
+    ctx.store
+        .update_auth_profile_status(profile_id, "login captured")?;
+    println!("Saved auth profile metadata for '{}'", name);
+    Ok(())
+}
+
+pub async fn auth_check(
+    ctx: &AppContext,
+    name: &str,
+    url: Option<&str>,
+    visible: bool,
+) -> Result<()> {
+    let profile = ctx
+        .store
+        .get_auth_profile_by_name(name)?
+        .ok_or_else(|| RivuletError::Config(format!("Auth profile not found: {}", name)))?;
+    let check_url = url.unwrap_or(&profile.site_url);
+
+    let config = ScraperConfig {
+        headless: !visible,
+        user_data_dir: Some(PathBuf::from(&profile.profile_dir)),
+        block_images: false,
+        block_stylesheets: false,
+        ..Default::default()
+    };
+
+    let scraper = ChromeScraper::new(config).await?;
+    match scraper.scrape(check_url).await {
+        Ok(result) => {
+            let status = format!("ok: extracted {} chars", result.content.len());
+            ctx.store.update_auth_profile_status(profile.id, &status)?;
+            println!("{} ({})", status, check_url);
+            Ok(())
+        }
+        Err(e) => {
+            let status = format!("failed: {}", e);
+            ctx.store.update_auth_profile_status(profile.id, &status)?;
+            Err(e)
+        }
+    }
+}
+
+pub fn auth_list(ctx: &AppContext) -> Result<()> {
+    let profiles = ctx.store.get_all_auth_profiles()?;
+    if profiles.is_empty() {
+        println!("No auth profiles");
+        return Ok(());
+    }
+
+    for profile in profiles {
+        let checked = profile
+            .last_checked_at
+            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "never".to_string());
+        let status = profile.last_status.unwrap_or_else(|| "unknown".to_string());
+        println!(
+            "{}\n  site: {}\n  profile_dir: {}\n  last_check: {} ({})",
+            profile.name, profile.site_url, profile.profile_dir, checked, status
+        );
+    }
+
+    Ok(())
+}
+
+fn default_auth_profile_dir(name: &str) -> Result<PathBuf> {
+    let data_dir = dirs::data_dir()
+        .ok_or_else(|| RivuletError::Config("Could not find data directory".into()))?;
+    Ok(data_dir
+        .join("rivulet")
+        .join("auth-profiles")
+        .join(sanitize_profile_name(name)))
+}
+
+fn sanitize_profile_name(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "default".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -519,5 +732,41 @@ mod tests {
     fn test_extract_attr_html_entities() {
         let line = r#"<outline title="A &amp; B"/>"#;
         assert_eq!(extract_attr(line, "title"), Some("A & B".to_string()));
+    }
+
+    #[test]
+    fn test_list_filter_from_flags() {
+        assert_eq!(
+            list_filter_from_flags(true, false, false, false, false).unwrap(),
+            Some(ItemListFilter::Unread)
+        );
+        assert_eq!(
+            list_filter_from_flags(false, true, false, false, false).unwrap(),
+            Some(ItemListFilter::Starred)
+        );
+        assert_eq!(
+            list_filter_from_flags(false, false, true, false, false).unwrap(),
+            Some(ItemListFilter::Queued)
+        );
+        assert_eq!(
+            list_filter_from_flags(false, false, false, true, false).unwrap(),
+            Some(ItemListFilter::Saved)
+        );
+        assert_eq!(
+            list_filter_from_flags(false, false, false, false, true).unwrap(),
+            Some(ItemListFilter::Archived)
+        );
+        assert_eq!(
+            list_filter_from_flags(false, false, false, false, false).unwrap(),
+            None
+        );
+        assert!(list_filter_from_flags(true, true, false, false, false).is_err());
+    }
+
+    #[test]
+    fn test_sanitize_profile_name() {
+        assert_eq!(sanitize_profile_name("New York Times"), "New-York-Times");
+        assert_eq!(sanitize_profile_name("paid_site-1"), "paid_site-1");
+        assert_eq!(sanitize_profile_name("***"), "default");
     }
 }

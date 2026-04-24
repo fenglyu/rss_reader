@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::scraper::{ChromeScraper, Scraper};
 use crate::store::Store;
 
-use self::app::{ActivePane, TuiApp};
+use self::app::{ActivePane, ItemView, TuiApp};
 use self::event::{Action, AppEvent, EventHandler};
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -52,7 +52,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
 
     // Load initial data
     load_feeds(&mut tui_app, &ctx)?;
-    load_all_items(&mut tui_app, &ctx)?;
+    load_current_items(&mut tui_app, &ctx)?;
 
     loop {
         terminal.draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
@@ -65,7 +65,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             ctx.store.delete_feed(feed_id)?;
                             load_feeds(&mut tui_app, &ctx)?;
-                            load_all_items(&mut tui_app, &ctx)?;
+                            load_current_items(&mut tui_app, &ctx)?;
                             tui_app.set_status(format!("Deleted feed: {}", feed_title));
                         }
                         _ => {
@@ -115,13 +115,9 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                             let item_id = item.id.clone();
                             let is_read = tui_app.is_item_read(&item_id);
                             ctx.store.set_read(&item_id, !is_read)?;
-                            if let Some(state) = tui_app.item_states.get_mut(&item_id) {
+                            update_item_state(&mut tui_app, item_id, |state| {
                                 state.is_read = !is_read;
-                            } else {
-                                let mut state = crate::domain::ItemState::new(item_id.clone());
-                                state.is_read = !is_read;
-                                tui_app.item_states.insert(item_id, state);
-                            }
+                            });
                         }
                     }
                     Action::ToggleStar => {
@@ -129,15 +125,47 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                             let item_id = item.id.clone();
                             let is_starred = tui_app.is_item_starred(&item_id);
                             ctx.store.set_starred(&item_id, !is_starred)?;
-                            if let Some(state) = tui_app.item_states.get_mut(&item_id) {
+                            update_item_state(&mut tui_app, item_id, |state| {
                                 state.is_starred = !is_starred;
-                            } else {
-                                let mut state = crate::domain::ItemState::new(item_id.clone());
-                                state.is_starred = !is_starred;
-                                tui_app.item_states.insert(item_id, state);
-                            }
+                            });
                         }
                     }
+                    Action::ToggleQueued => {
+                        if let Some(item) = tui_app.selected_item() {
+                            let item_id = item.id.clone();
+                            let is_queued = tui_app.is_item_queued(&item_id);
+                            ctx.store.set_queued(&item_id, !is_queued)?;
+                            update_item_state(&mut tui_app, item_id, |state| {
+                                state.is_queued = !is_queued;
+                            });
+                        }
+                    }
+                    Action::ToggleSaved => {
+                        if let Some(item) = tui_app.selected_item() {
+                            let item_id = item.id.clone();
+                            let is_saved = tui_app.is_item_saved(&item_id);
+                            ctx.store.set_saved(&item_id, !is_saved)?;
+                            update_item_state(&mut tui_app, item_id, |state| {
+                                state.is_saved = !is_saved;
+                            });
+                        }
+                    }
+                    Action::ToggleArchived => {
+                        if let Some(item) = tui_app.selected_item() {
+                            let item_id = item.id.clone();
+                            let is_archived = tui_app.is_item_archived(&item_id);
+                            ctx.store.set_archived(&item_id, !is_archived)?;
+                            update_item_state(&mut tui_app, item_id, |state| {
+                                state.is_archived = !is_archived;
+                            });
+                        }
+                    }
+                    Action::ViewAll => set_item_view(&mut tui_app, &ctx, ItemView::All)?,
+                    Action::ViewUnread => set_item_view(&mut tui_app, &ctx, ItemView::Unread)?,
+                    Action::ViewStarred => set_item_view(&mut tui_app, &ctx, ItemView::Starred)?,
+                    Action::ViewQueued => set_item_view(&mut tui_app, &ctx, ItemView::Queued)?,
+                    Action::ViewSaved => set_item_view(&mut tui_app, &ctx, ItemView::Saved)?,
+                    Action::ViewArchived => set_item_view(&mut tui_app, &ctx, ItemView::Archived)?,
                     Action::OpenInBrowser => {
                         if let Some(item) = tui_app.selected_item() {
                             if let Some(link) = &item.link {
@@ -147,14 +175,9 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                                     // Mark as read when opened
                                     let item_id = item.id.clone();
                                     ctx.store.set_read(&item_id, true)?;
-                                    if let Some(state) = tui_app.item_states.get_mut(&item_id) {
+                                    update_item_state(&mut tui_app, item_id, |state| {
                                         state.is_read = true;
-                                    } else {
-                                        let mut state =
-                                            crate::domain::ItemState::new(item_id.clone());
-                                        state.is_read = true;
-                                        tui_app.item_states.insert(item_id, state);
-                                    }
+                                    });
                                 }
                             }
                         }
@@ -188,9 +211,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                             for feed_id in updated_feed_ids {
                                 if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
                                     items_to_scrape.extend(
-                                        items
-                                            .into_iter()
-                                            .filter(|i| ChromeScraper::needs_scraping(i)),
+                                        items.into_iter().filter(ChromeScraper::needs_scraping),
                                     );
                                 }
                             }
@@ -200,7 +221,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         }
 
                         load_feeds(&mut tui_app, &ctx)?;
-                        load_all_items(&mut tui_app, &ctx)?;
+                        load_current_items(&mut tui_app, &ctx)?;
 
                         tui_app.is_refreshing = false;
                         tui_app.set_status(format!("Refreshed: {} new items", total_new));
@@ -239,8 +260,8 @@ fn load_feeds(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     Ok(())
 }
 
-fn load_all_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
-    tui_app.items = ctx.store.get_all_items()?;
+fn load_current_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    tui_app.items = ctx.store.get_items_by_filter(tui_app.item_view.filter())?;
     tui_app.item_states.clear();
     for item in &tui_app.items {
         if let Some(state) = ctx.store.get_item_state(&item.id)? {
@@ -254,7 +275,18 @@ fn load_all_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     Ok(())
 }
 
+fn set_item_view(tui_app: &mut TuiApp, ctx: &AppContext, view: ItemView) -> Result<()> {
+    tui_app.item_view = view;
+    tui_app.item_index = 0;
+    tui_app.preview_scroll = 0;
+    load_current_items(tui_app, ctx)?;
+    tui_app.active_pane = ActivePane::Items;
+    tui_app.set_status(format!("Showing {} items", view.label()));
+    Ok(())
+}
+
 fn load_items_for_feed(tui_app: &mut TuiApp, ctx: &AppContext, feed_id: i64) -> Result<()> {
+    tui_app.item_view = ItemView::All;
     tui_app.items = ctx.store.get_items_by_feed(feed_id)?;
     tui_app.item_index = 0;
     tui_app.item_states.clear();
@@ -265,4 +297,16 @@ fn load_items_for_feed(tui_app: &mut TuiApp, ctx: &AppContext, feed_id: i64) -> 
     }
     tui_app.item_list_state.select(Some(0));
     Ok(())
+}
+
+fn update_item_state(
+    tui_app: &mut TuiApp,
+    item_id: String,
+    update: impl FnOnce(&mut crate::domain::ItemState),
+) {
+    let state = tui_app
+        .item_states
+        .entry(item_id.clone())
+        .or_insert_with(|| crate::domain::ItemState::new(item_id));
+    update(state);
 }

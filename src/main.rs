@@ -4,7 +4,7 @@ use clap::Parser;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use rivulet::app::AppContext;
-use rivulet::cli::{commands, Cli, Commands, DaemonAction};
+use rivulet::cli::{commands, AuthAction, Cli, Commands, DaemonAction};
 use rivulet::config::Config;
 use rivulet::daemon::{Daemon, DaemonConfig};
 
@@ -44,12 +44,35 @@ async fn main() -> anyhow::Result<()> {
         Commands::Update => {
             commands::update_feeds(&ctx).await?;
         }
-        Commands::List { items } => {
-            if items {
-                commands::list_items(&ctx)?;
+        Commands::List {
+            items,
+            unread,
+            starred,
+            queued,
+            saved,
+            archived,
+        } => {
+            let filter =
+                commands::list_filter_from_flags(unread, starred, queued, saved, archived)?;
+            if items || filter.is_some() {
+                commands::list_items(&ctx, filter)?;
             } else {
                 commands::list_feeds(&ctx)?;
             }
+        }
+        Commands::Search {
+            query,
+            limit,
+            unread,
+            starred,
+            queued,
+            saved,
+            archived,
+        } => {
+            let filter =
+                commands::list_filter_from_flags(unread, starred, queued, saved, archived)?
+                    .unwrap_or(rivulet::store::ItemListFilter::All);
+            commands::search_items(&ctx, &query, filter, limit)?;
         }
         Commands::Tui => {
             rivulet::tui::run(Arc::new(ctx), Arc::new(config)).await?;
@@ -59,9 +82,33 @@ async fn main() -> anyhow::Result<()> {
             limit,
             concurrency,
             visible,
+            auth_profile,
         } => {
-            commands::scrape_content(&ctx, feed.as_deref(), limit, concurrency, visible).await?;
+            commands::scrape_content(
+                &ctx,
+                feed.as_deref(),
+                limit,
+                concurrency,
+                visible,
+                auth_profile.as_deref(),
+            )
+            .await?;
         }
+        Commands::Auth { action } => match action {
+            AuthAction::Add {
+                name,
+                site,
+                profile_dir,
+            } => {
+                commands::auth_add(&ctx, &name, &site, profile_dir).await?;
+            }
+            AuthAction::Check { name, url, visible } => {
+                commands::auth_check(&ctx, &name, url.as_deref(), visible).await?;
+            }
+            AuthAction::List => {
+                commands::auth_list(&ctx)?;
+            }
+        },
         Commands::Daemon { action } => {
             match action {
                 DaemonAction::Start {

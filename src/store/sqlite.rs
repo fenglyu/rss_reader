@@ -6,8 +6,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
 
 use crate::app::{Result, RivuletError};
-use crate::domain::{Feed, FeedUpdate, Item, ItemState};
-use crate::store::Store;
+use crate::domain::{AuthProfile, Feed, FeedUpdate, Item, ItemState};
+use crate::store::{ItemListFilter, Store};
 
 pub struct SqliteStore {
     conn: Mutex<Connection>,
@@ -33,9 +33,12 @@ impl SqliteStore {
     }
 
     fn run_migrations(&self) -> Result<()> {
-        let migrations = Migrations::new(vec![M::up(include_str!(
-            "../../migrations/001-initial/up.sql"
-        ))]);
+        let migrations = Migrations::new(vec![
+            M::up(include_str!("../../migrations/001-initial/up.sql")),
+            M::up(include_str!("../../migrations/002-reading-workflow/up.sql")),
+            M::up(include_str!("../../migrations/003-search-index/up.sql")),
+            M::up(include_str!("../../migrations/004-auth-profiles/up.sql")),
+        ]);
 
         let mut conn = self.conn.lock().map_err(|e| {
             RivuletError::Database(rusqlite::Error::SqliteFailure(
@@ -57,6 +60,132 @@ impl SqliteStore {
             .map(|dt| dt.with_timezone(&Utc))
             .ok()
             .or_else(|| s.parse::<DateTime<Utc>>().ok())
+    }
+
+    fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Item> {
+        Ok(Item {
+            id: row.get(0)?,
+            feed_id: row.get(1)?,
+            title: row.get(2)?,
+            link: row.get(3)?,
+            content: row.get(4)?,
+            summary: row.get(5)?,
+            author: row.get(6)?,
+            published_at: row
+                .get::<_, Option<String>>(7)?
+                .and_then(|s| Self::parse_datetime(&s)),
+            fetched_at: row
+                .get::<_, String>(8)
+                .ok()
+                .and_then(|s| Self::parse_datetime(&s))
+                .unwrap_or_else(Utc::now),
+        })
+    }
+
+    fn get_items_where(&self, where_clause: Option<&str>) -> Result<Vec<Item>> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let sql = match where_clause {
+            Some(where_clause) => format!(
+                "SELECT i.id, i.feed_id, i.title, i.link, i.content, i.summary, i.author, i.published_at, i.fetched_at
+                 FROM items i
+                 LEFT JOIN item_state s ON i.id = s.item_id
+                 WHERE {}
+                 ORDER BY i.published_at DESC, i.fetched_at DESC",
+                where_clause
+            ),
+            None => {
+                "SELECT id, feed_id, title, link, content, summary, author, published_at, fetched_at
+                 FROM items ORDER BY published_at DESC, fetched_at DESC"
+                    .to_string()
+            }
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
+        let items = stmt
+            .query_map([], Self::row_to_item)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(items)
+    }
+
+    fn filter_clause(filter: ItemListFilter, state_alias: &str) -> String {
+        match filter {
+            ItemListFilter::All => {
+                format!("({state_alias}.is_archived IS NULL OR {state_alias}.is_archived = 0)")
+            }
+            ItemListFilter::Unread => format!(
+                "({state_alias}.is_archived IS NULL OR {state_alias}.is_archived = 0) AND ({state_alias}.is_read IS NULL OR {state_alias}.is_read = 0)"
+            ),
+            ItemListFilter::Starred => format!(
+                "{state_alias}.is_starred = 1 AND ({state_alias}.is_archived IS NULL OR {state_alias}.is_archived = 0)"
+            ),
+            ItemListFilter::Queued => format!(
+                "{state_alias}.is_queued = 1 AND ({state_alias}.is_archived IS NULL OR {state_alias}.is_archived = 0)"
+            ),
+            ItemListFilter::Saved => format!(
+                "{state_alias}.is_saved = 1 AND ({state_alias}.is_archived IS NULL OR {state_alias}.is_archived = 0)"
+            ),
+            ItemListFilter::Archived => format!("{state_alias}.is_archived = 1"),
+        }
+    }
+
+    fn refresh_search_index_for_item_locked(conn: &Connection, item_id: &str) -> Result<()> {
+        conn.execute(
+            "DELETE FROM item_search WHERE item_id = ?1",
+            params![item_id],
+        )?;
+        conn.execute(
+            "INSERT INTO item_search (item_id, title, author, summary, content, feed_title, link)
+             SELECT i.id,
+                    COALESCE(i.title, ''),
+                    COALESCE(i.author, ''),
+                    COALESCE(i.summary, ''),
+                    COALESCE(i.content, ''),
+                    COALESCE(f.title, f.url, ''),
+                    COALESCE(i.link, '')
+             FROM items i
+             JOIN feeds f ON f.id = i.feed_id
+             WHERE i.id = ?1",
+            params![item_id],
+        )?;
+        Ok(())
+    }
+
+    fn refresh_search_index_for_feed_locked(conn: &Connection, feed_id: i64) -> Result<()> {
+        let mut stmt = conn.prepare("SELECT id FROM items WHERE feed_id = ?1")?;
+        let ids = stmt
+            .query_map(params![feed_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        for item_id in ids {
+            Self::refresh_search_index_for_item_locked(conn, &item_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn row_to_auth_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuthProfile> {
+        Ok(AuthProfile {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            site_url: row.get(2)?,
+            profile_dir: row.get(3)?,
+            created_at: row
+                .get::<_, String>(4)
+                .ok()
+                .and_then(|s| Self::parse_datetime(&s))
+                .unwrap_or_else(Utc::now),
+            last_checked_at: row
+                .get::<_, Option<String>>(5)?
+                .and_then(|s| Self::parse_datetime(&s)),
+            last_status: row.get(6)?,
+        })
     }
 }
 
@@ -227,6 +356,7 @@ impl Store for SqliteStore {
                 params![last_fetched_at.to_rfc3339(), id],
             )?;
         }
+        Self::refresh_search_index_for_feed_locked(&conn, id)?;
 
         Ok(())
     }
@@ -239,7 +369,101 @@ impl Store for SqliteStore {
             ))
         })?;
 
+        conn.execute(
+            "DELETE FROM item_search
+             WHERE item_id IN (SELECT id FROM items WHERE feed_id = ?1)",
+            params![id],
+        )?;
         conn.execute("DELETE FROM feeds WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    fn add_auth_profile(&self, profile: &AuthProfile) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        conn.execute(
+            "INSERT INTO auth_profiles (name, site_url, profile_dir, created_at, last_checked_at, last_status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(name) DO UPDATE SET
+                site_url = excluded.site_url,
+                profile_dir = excluded.profile_dir",
+            params![
+                profile.name,
+                profile.site_url,
+                profile.profile_dir,
+                profile.created_at.to_rfc3339(),
+                profile.last_checked_at.map(|dt| dt.to_rfc3339()),
+                profile.last_status
+            ],
+        )?;
+
+        let id = conn.query_row(
+            "SELECT id FROM auth_profiles WHERE name = ?1",
+            params![profile.name],
+            |row| row.get(0),
+        )?;
+
+        Ok(id)
+    }
+
+    fn get_auth_profile_by_name(&self, name: &str) -> Result<Option<AuthProfile>> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let profile = conn
+            .query_row(
+                "SELECT id, name, site_url, profile_dir, created_at, last_checked_at, last_status
+                 FROM auth_profiles WHERE name = ?1",
+                params![name],
+                Self::row_to_auth_profile,
+            )
+            .optional()?;
+
+        Ok(profile)
+    }
+
+    fn get_all_auth_profiles(&self) -> Result<Vec<AuthProfile>> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, name, site_url, profile_dir, created_at, last_checked_at, last_status
+             FROM auth_profiles ORDER BY name",
+        )?;
+
+        let profiles = stmt
+            .query_map([], Self::row_to_auth_profile)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(profiles)
+    }
+
+    fn update_auth_profile_status(&self, id: i64, status: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        conn.execute(
+            "UPDATE auth_profiles SET last_checked_at = ?1, last_status = ?2 WHERE id = ?3",
+            params![Utc::now().to_rfc3339(), status, id],
+        )?;
+
         Ok(())
     }
 
@@ -251,7 +475,7 @@ impl Store for SqliteStore {
             ))
         })?;
 
-        conn.execute(
+        let inserted = conn.execute(
             "INSERT OR IGNORE INTO items (id, feed_id, title, link, content, summary, author, published_at, fetched_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
@@ -266,6 +490,9 @@ impl Store for SqliteStore {
                 item.fetched_at.to_rfc3339()
             ],
         )?;
+        if inserted > 0 {
+            Self::refresh_search_index_for_item_locked(&conn, &item.id)?;
+        }
 
         Ok(())
     }
@@ -280,6 +507,7 @@ impl Store for SqliteStore {
 
         let tx = conn.transaction()?;
         let mut count = 0;
+        let mut inserted_ids = Vec::new();
 
         for item in items {
             let inserted = tx.execute(
@@ -298,9 +526,15 @@ impl Store for SqliteStore {
                 ],
             )?;
             count += inserted;
+            if inserted > 0 {
+                inserted_ids.push(item.id.clone());
+            }
         }
 
         tx.commit()?;
+        for item_id in inserted_ids {
+            Self::refresh_search_index_for_item_locked(&conn, &item_id)?;
+        }
         Ok(count)
     }
 
@@ -317,23 +551,7 @@ impl Store for SqliteStore {
                 "SELECT id, feed_id, title, link, content, summary, author, published_at, fetched_at
                  FROM items WHERE id = ?1",
                 params![id],
-                |row| {
-                    Ok(Item {
-                        id: row.get(0)?,
-                        feed_id: row.get(1)?,
-                        title: row.get(2)?,
-                        link: row.get(3)?,
-                        content: row.get(4)?,
-                        summary: row.get(5)?,
-                        author: row.get(6)?,
-                        published_at: row.get::<_, Option<String>>(7)?
-                            .and_then(|s| Self::parse_datetime(&s)),
-                        fetched_at: row.get::<_, String>(8)
-                            .ok()
-                            .and_then(|s| Self::parse_datetime(&s))
-                            .unwrap_or_else(Utc::now),
-                    })
-                },
+                Self::row_to_item,
             )
             .optional()?;
 
@@ -354,31 +572,26 @@ impl Store for SqliteStore {
         )?;
 
         let items = stmt
-            .query_map(params![feed_id], |row| {
-                Ok(Item {
-                    id: row.get(0)?,
-                    feed_id: row.get(1)?,
-                    title: row.get(2)?,
-                    link: row.get(3)?,
-                    content: row.get(4)?,
-                    summary: row.get(5)?,
-                    author: row.get(6)?,
-                    published_at: row
-                        .get::<_, Option<String>>(7)?
-                        .and_then(|s| Self::parse_datetime(&s)),
-                    fetched_at: row
-                        .get::<_, String>(8)
-                        .ok()
-                        .and_then(|s| Self::parse_datetime(&s))
-                        .unwrap_or_else(Utc::now),
-                })
-            })?
+            .query_map(params![feed_id], Self::row_to_item)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(items)
     }
 
     fn get_all_items(&self) -> Result<Vec<Item>> {
+        self.get_items_where(None)
+    }
+
+    fn get_items_by_filter(&self, filter: ItemListFilter) -> Result<Vec<Item>> {
+        let where_clause = Self::filter_clause(filter, "s");
+        self.get_items_where(Some(&where_clause))
+    }
+
+    fn search_items(&self, query: &str, filter: ItemListFilter, limit: usize) -> Result<Vec<Item>> {
+        if query.trim().is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let conn = self.conn.lock().map_err(|e| {
             RivuletError::Database(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
@@ -386,31 +599,20 @@ impl Store for SqliteStore {
             ))
         })?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, feed_id, title, link, content, summary, author, published_at, fetched_at
-             FROM items ORDER BY published_at DESC, fetched_at DESC",
-        )?;
+        let state_clause = Self::filter_clause(filter, "st");
+        let sql = format!(
+            "SELECT i.id, i.feed_id, i.title, i.link, i.content, i.summary, i.author, i.published_at, i.fetched_at
+             FROM item_search s
+             JOIN items i ON i.id = s.item_id
+             LEFT JOIN item_state st ON i.id = st.item_id
+             WHERE item_search MATCH ?1 AND {state_clause}
+             ORDER BY bm25(item_search), i.published_at DESC, i.fetched_at DESC
+             LIMIT ?2"
+        );
 
+        let mut stmt = conn.prepare(&sql)?;
         let items = stmt
-            .query_map([], |row| {
-                Ok(Item {
-                    id: row.get(0)?,
-                    feed_id: row.get(1)?,
-                    title: row.get(2)?,
-                    link: row.get(3)?,
-                    content: row.get(4)?,
-                    summary: row.get(5)?,
-                    author: row.get(6)?,
-                    published_at: row
-                        .get::<_, Option<String>>(7)?
-                        .and_then(|s| Self::parse_datetime(&s)),
-                    fetched_at: row
-                        .get::<_, String>(8)
-                        .ok()
-                        .and_then(|s| Self::parse_datetime(&s))
-                        .unwrap_or_else(Utc::now),
-                })
-            })?
+            .query_map(params![query.trim(), limit as i64], Self::row_to_item)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(items)
@@ -443,7 +645,8 @@ impl Store for SqliteStore {
 
         let result = conn
             .query_row(
-                "SELECT item_id, is_read, is_starred, read_at, starred_at
+                "SELECT item_id, is_read, is_starred, is_queued, is_saved, is_archived,
+                        read_at, starred_at, queued_at, saved_at, archived_at
                  FROM item_state WHERE item_id = ?1",
                 params![item_id],
                 |row| {
@@ -451,11 +654,23 @@ impl Store for SqliteStore {
                         item_id: row.get(0)?,
                         is_read: row.get::<_, i32>(1)? != 0,
                         is_starred: row.get::<_, i32>(2)? != 0,
+                        is_queued: row.get::<_, i32>(3)? != 0,
+                        is_saved: row.get::<_, i32>(4)? != 0,
+                        is_archived: row.get::<_, i32>(5)? != 0,
                         read_at: row
-                            .get::<_, Option<String>>(3)?
+                            .get::<_, Option<String>>(6)?
                             .and_then(|s| Self::parse_datetime(&s)),
                         starred_at: row
-                            .get::<_, Option<String>>(4)?
+                            .get::<_, Option<String>>(7)?
+                            .and_then(|s| Self::parse_datetime(&s)),
+                        queued_at: row
+                            .get::<_, Option<String>>(8)?
+                            .and_then(|s| Self::parse_datetime(&s)),
+                        saved_at: row
+                            .get::<_, Option<String>>(9)?
+                            .and_then(|s| Self::parse_datetime(&s)),
+                        archived_at: row
+                            .get::<_, Option<String>>(10)?
                             .and_then(|s| Self::parse_datetime(&s)),
                     })
                 },
@@ -511,6 +726,75 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    fn set_queued(&self, item_id: &str, is_queued: bool) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let queued_at = if is_queued {
+            Some(Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+
+        conn.execute(
+            "INSERT INTO item_state (item_id, is_queued, queued_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(item_id) DO UPDATE SET is_queued = ?2, queued_at = ?3",
+            params![item_id, is_queued as i32, queued_at],
+        )?;
+
+        Ok(())
+    }
+
+    fn set_saved(&self, item_id: &str, is_saved: bool) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let saved_at = if is_saved {
+            Some(Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+
+        conn.execute(
+            "INSERT INTO item_state (item_id, is_saved, saved_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(item_id) DO UPDATE SET is_saved = ?2, saved_at = ?3",
+            params![item_id, is_saved as i32, saved_at],
+        )?;
+
+        Ok(())
+    }
+
+    fn set_archived(&self, item_id: &str, is_archived: bool) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let archived_at = if is_archived {
+            Some(Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+
+        conn.execute(
+            "INSERT INTO item_state (item_id, is_archived, archived_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(item_id) DO UPDATE SET is_archived = ?2, archived_at = ?3",
+            params![item_id, is_archived as i32, archived_at],
+        )?;
+
+        Ok(())
+    }
+
     fn get_unread_count(&self, feed_id: i64) -> Result<i64> {
         let conn = self.conn.lock().map_err(|e| {
             RivuletError::Database(rusqlite::Error::SqliteFailure(
@@ -522,7 +806,9 @@ impl Store for SqliteStore {
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM items i
              LEFT JOIN item_state s ON i.id = s.item_id
-             WHERE i.feed_id = ?1 AND (s.is_read IS NULL OR s.is_read = 0)",
+             WHERE i.feed_id = ?1
+               AND (s.is_archived IS NULL OR s.is_archived = 0)
+               AND (s.is_read IS NULL OR s.is_read = 0)",
             params![feed_id],
             |row| row.get(0),
         )?;
@@ -542,6 +828,7 @@ impl Store for SqliteStore {
             "UPDATE items SET content = ?1 WHERE id = ?2",
             params![content, id],
         )?;
+        Self::refresh_search_index_for_item_locked(&conn, id)?;
 
         Ok(())
     }
@@ -615,6 +902,9 @@ mod tests {
         store.set_read(&items[1].id, true).unwrap();
 
         assert_eq!(store.get_unread_count(feed_id).unwrap(), 3);
+
+        store.set_archived(&items[2].id, true).unwrap();
+        assert_eq!(store.get_unread_count(feed_id).unwrap(), 2);
     }
 
     #[test]
@@ -798,6 +1088,178 @@ mod tests {
     }
 
     #[test]
+    fn test_set_reading_workflow_states() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let item = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        store.add_item(&item).unwrap();
+
+        store.set_queued(&item.id, true).unwrap();
+        store.set_saved(&item.id, true).unwrap();
+        store.set_archived(&item.id, true).unwrap();
+
+        let state = store.get_item_state(&item.id).unwrap().unwrap();
+        assert!(state.is_queued);
+        assert!(state.is_saved);
+        assert!(state.is_archived);
+        assert!(state.queued_at.is_some());
+        assert!(state.saved_at.is_some());
+        assert!(state.archived_at.is_some());
+
+        store.set_queued(&item.id, false).unwrap();
+        store.set_saved(&item.id, false).unwrap();
+        store.set_archived(&item.id, false).unwrap();
+
+        let state = store.get_item_state(&item.id).unwrap().unwrap();
+        assert!(!state.is_queued);
+        assert!(!state.is_saved);
+        assert!(!state.is_archived);
+        assert!(state.queued_at.is_none());
+        assert!(state.saved_at.is_none());
+        assert!(state.archived_at.is_none());
+    }
+
+    #[test]
+    fn test_get_items_by_filter() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let unread = Item::new(feed_id, "https://example.com/feed.xml", "unread");
+        let read = Item::new(feed_id, "https://example.com/feed.xml", "read");
+        let starred = Item::new(feed_id, "https://example.com/feed.xml", "starred");
+        let queued = Item::new(feed_id, "https://example.com/feed.xml", "queued");
+        let saved = Item::new(feed_id, "https://example.com/feed.xml", "saved");
+        let archived = Item::new(feed_id, "https://example.com/feed.xml", "archived");
+
+        store
+            .add_items(&[
+                unread.clone(),
+                read.clone(),
+                starred.clone(),
+                queued.clone(),
+                saved.clone(),
+                archived.clone(),
+            ])
+            .unwrap();
+
+        store.set_read(&read.id, true).unwrap();
+        store.set_starred(&starred.id, true).unwrap();
+        store.set_queued(&queued.id, true).unwrap();
+        store.set_saved(&saved.id, true).unwrap();
+        store.set_archived(&archived.id, true).unwrap();
+
+        let unread_ids: Vec<String> = store
+            .get_items_by_filter(ItemListFilter::Unread)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert!(unread_ids.contains(&unread.id));
+        assert!(!unread_ids.contains(&read.id));
+        assert!(!unread_ids.contains(&archived.id));
+
+        let all_ids: Vec<String> = store
+            .get_items_by_filter(ItemListFilter::All)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert!(all_ids.contains(&unread.id));
+        assert!(!all_ids.contains(&archived.id));
+
+        let starred_ids: Vec<String> = store
+            .get_items_by_filter(ItemListFilter::Starred)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(starred_ids, vec![starred.id.clone()]);
+
+        let queued_ids: Vec<String> = store
+            .get_items_by_filter(ItemListFilter::Queued)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(queued_ids, vec![queued.id.clone()]);
+
+        let saved_ids: Vec<String> = store
+            .get_items_by_filter(ItemListFilter::Saved)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(saved_ids, vec![saved.id.clone()]);
+
+        let archived_ids: Vec<String> = store
+            .get_items_by_filter(ItemListFilter::Archived)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(archived_ids, vec![archived.id.clone()]);
+    }
+
+    #[test]
+    fn test_search_items_indexes_inserted_and_scraped_content() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let mut item = Item::new(feed_id, "https://example.com/feed.xml", "entry-1");
+        item.title = Some("Rust release notes".into());
+        item.summary = Some("Compiler improvements".into());
+        store.add_item(&item).unwrap();
+
+        let title_results = store
+            .search_items("release", ItemListFilter::All, 10)
+            .unwrap();
+        assert_eq!(title_results.len(), 1);
+        assert_eq!(title_results[0].id, item.id);
+
+        store
+            .update_item_content(&item.id, "Ownership and borrow checker deep dive")
+            .unwrap();
+
+        let content_results = store
+            .search_items("ownership", ItemListFilter::All, 10)
+            .unwrap();
+        assert_eq!(content_results.len(), 1);
+        assert_eq!(content_results[0].id, item.id);
+    }
+
+    #[test]
+    fn test_search_items_respects_filters() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let mut active = Item::new(feed_id, "https://example.com/feed.xml", "active");
+        active.title = Some("Searchable active item".into());
+        let mut archived = Item::new(feed_id, "https://example.com/feed.xml", "archived");
+        archived.title = Some("Searchable archived item".into());
+        store
+            .add_items(&[active.clone(), archived.clone()])
+            .unwrap();
+        store.set_archived(&archived.id, true).unwrap();
+
+        let active_results = store
+            .search_items("searchable", ItemListFilter::All, 10)
+            .unwrap();
+        assert_eq!(active_results.len(), 1);
+        assert_eq!(active_results[0].id, active.id);
+
+        let archived_results = store
+            .search_items("searchable", ItemListFilter::Archived, 10)
+            .unwrap();
+        assert_eq!(archived_results.len(), 1);
+        assert_eq!(archived_results[0].id, archived.id);
+    }
+
+    #[test]
     fn test_update_item_content() {
         let store = SqliteStore::in_memory().unwrap();
         let feed = Feed::new("https://example.com/feed.xml".into());
@@ -831,18 +1293,10 @@ mod tests {
         let feed2_id = store.add_feed(&feed2).unwrap();
 
         store
-            .add_item(&Item::new(
-                feed1_id,
-                "https://example.com/feed1.xml",
-                "e1",
-            ))
+            .add_item(&Item::new(feed1_id, "https://example.com/feed1.xml", "e1"))
             .unwrap();
         store
-            .add_item(&Item::new(
-                feed2_id,
-                "https://example.com/feed2.xml",
-                "e2",
-            ))
+            .add_item(&Item::new(feed2_id, "https://example.com/feed2.xml", "e2"))
             .unwrap();
 
         let all = store.get_all_items().unwrap();
@@ -857,6 +1311,31 @@ mod tests {
     fn test_get_feed_nonexistent() {
         let store = SqliteStore::in_memory().unwrap();
         assert!(store.get_feed(999).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_auth_profile_crud_and_status() {
+        let store = SqliteStore::in_memory().unwrap();
+        let profile = AuthProfile::new(
+            "nyt".into(),
+            "https://www.nytimes.com".into(),
+            "/tmp/rivulet-auth/nyt".into(),
+        );
+
+        let id = store.add_auth_profile(&profile).unwrap();
+        let stored = store.get_auth_profile_by_name("nyt").unwrap().unwrap();
+        assert_eq!(stored.id, id);
+        assert_eq!(stored.site_url, "https://www.nytimes.com");
+        assert_eq!(stored.profile_dir, "/tmp/rivulet-auth/nyt");
+        assert!(stored.last_status.is_none());
+
+        store.update_auth_profile_status(id, "ok").unwrap();
+        let stored = store.get_auth_profile_by_name("nyt").unwrap().unwrap();
+        assert_eq!(stored.last_status, Some("ok".into()));
+        assert!(stored.last_checked_at.is_some());
+
+        let profiles = store.get_all_auth_profiles().unwrap();
+        assert_eq!(profiles.len(), 1);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Configuration for the web scraper
@@ -37,6 +38,9 @@ pub struct ScraperConfig {
 
     /// User agent string to use
     pub user_agent: Option<String>,
+
+    /// Optional persistent Chrome user data directory for authenticated sessions
+    pub user_data_dir: Option<PathBuf>,
 }
 
 impl Default for ScraperConfig {
@@ -86,6 +90,7 @@ impl Default for ScraperConfig {
                  (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                     .to_string(),
             ),
+            user_data_dir: None,
         }
     }
 }

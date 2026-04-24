@@ -19,6 +19,15 @@ pub struct KeybindingConfig {
     pub select: Vec<String>,
     pub toggle_read: Vec<String>,
     pub toggle_star: Vec<String>,
+    pub toggle_queued: Vec<String>,
+    pub toggle_saved: Vec<String>,
+    pub toggle_archived: Vec<String>,
+    pub view_all: Vec<String>,
+    pub view_unread: Vec<String>,
+    pub view_starred: Vec<String>,
+    pub view_queued: Vec<String>,
+    pub view_saved: Vec<String>,
+    pub view_archived: Vec<String>,
     pub open_in_browser: Vec<String>,
     pub refresh: Vec<String>,
     pub toggle_maximize: Vec<String>,
@@ -38,6 +47,15 @@ impl Default for KeybindingConfig {
             select: vec!["Enter".to_string()],
             toggle_read: vec!["r".to_string()],
             toggle_star: vec!["s".to_string()],
+            toggle_queued: vec!["L".to_string()],
+            toggle_saved: vec!["S".to_string()],
+            toggle_archived: vec!["x".to_string()],
+            view_all: vec!["a".to_string()],
+            view_unread: vec!["u".to_string()],
+            view_starred: vec!["f".to_string()],
+            view_queued: vec!["l".to_string()],
+            view_saved: vec!["v".to_string()],
+            view_archived: vec!["X".to_string()],
             open_in_browser: vec!["o".to_string()],
             refresh: vec!["R".to_string()],
             toggle_maximize: vec!["m".to_string()],
@@ -69,6 +87,24 @@ impl KeybindingConfig {
             Action::ToggleRead
         } else if self.matches_key(key, &self.toggle_star) {
             Action::ToggleStar
+        } else if self.matches_key(key, &self.toggle_queued) {
+            Action::ToggleQueued
+        } else if self.matches_key(key, &self.toggle_saved) {
+            Action::ToggleSaved
+        } else if self.matches_key(key, &self.toggle_archived) {
+            Action::ToggleArchived
+        } else if self.matches_key(key, &self.view_all) {
+            Action::ViewAll
+        } else if self.matches_key(key, &self.view_unread) {
+            Action::ViewUnread
+        } else if self.matches_key(key, &self.view_starred) {
+            Action::ViewStarred
+        } else if self.matches_key(key, &self.view_queued) {
+            Action::ViewQueued
+        } else if self.matches_key(key, &self.view_saved) {
+            Action::ViewSaved
+        } else if self.matches_key(key, &self.view_archived) {
+            Action::ViewArchived
         } else if self.matches_key(key, &self.open_in_browser) {
             Action::OpenInBrowser
         } else if self.matches_key(key, &self.refresh) {
@@ -279,5 +315,32 @@ mod tests {
 
         let key = KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE);
         assert_eq!(config.get_action(&key), Action::DeleteFeed);
+
+        let key = KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ToggleQueued);
+
+        let key = KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ToggleSaved);
+
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ToggleArchived);
+
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ViewAll);
+
+        let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ViewUnread);
+
+        let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ViewStarred);
+
+        let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ViewQueued);
+
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ViewSaved);
+
+        let key = KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ViewArchived);
     }
 }

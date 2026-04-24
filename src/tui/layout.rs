@@ -114,8 +114,17 @@ fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
         .map(|item| {
             let is_read = app.is_item_read(&item.id);
             let is_starred = app.is_item_starred(&item.id);
+            let is_queued = app.is_item_queued(&item.id);
+            let is_saved = app.is_item_saved(&item.id);
+            let is_archived = app.is_item_archived(&item.id);
 
-            let marker = if is_starred {
+            let marker = if is_archived {
+                "x"
+            } else if is_saved {
+                "S"
+            } else if is_queued {
+                "Q"
+            } else if is_starred {
                 "★"
             } else if !is_read {
                 "●"
@@ -143,7 +152,8 @@ fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
         .collect();
 
     let title = format!(
-        " Items ({}) [{}/{}] ",
+        " Items: {} ({}) [{}/{}] ",
+        app.item_view.label(),
         app.items.len(),
         app.item_index + 1,
         app.items.len().max(1)
@@ -251,7 +261,7 @@ fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &Color
     } else if app.maximized {
         "j/k:Scroll  n/p:Page  m:Exit maximize  q:Quit".to_string()
     } else {
-        "j/k:Nav  n/p:Page  Tab:Pane  r:Read  s:Star  o:Open  R:Refresh  d:Delete  m:Max  q:Quit"
+        "j/k:Nav  a/u/f/l/v/X:Views  r:Read  s:Star  L:Queue  S:Save  x:Archive  o:Open  R:Refresh  q:Quit"
             .to_string()
     };
 

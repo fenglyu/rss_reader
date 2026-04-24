@@ -9,6 +9,7 @@ A terminal-first, offline-first RSS/Atom feed reader with full-text content scra
 - **Content Scraping** - Fetch full articles using headless Chrome
 - **Background Updates** - Built-in daemon for automatic feed updates
 - **OPML Import** - Import feeds from other readers
+- **Reading Workflow** - Unread/starred/queued/saved/archived item views
 - **Configurable** - Customize colors, keybindings, and scraper settings
 
 ## Installation
@@ -75,6 +76,11 @@ rivulet import <FILE>     # Import OPML file
 rivulet update            # Update all feeds
 rivulet list              # List feeds
 rivulet list --items      # List all items
+rivulet list --unread     # List unread items
+rivulet list --queued     # List read-later queue
+rivulet search rust       # Search local titles, summaries, and scraped content
+rivulet auth add nyt --site https://www.nytimes.com  # Create/login to a Chrome auth profile
+rivulet scrape --auth-profile nyt --limit 10         # Scrape with saved Chrome session
 rivulet tui               # Launch terminal UI
 rivulet scrape            # Scrape full article content
 rivulet daemon start      # Start background updater
@@ -90,11 +96,18 @@ Many RSS feeds only include summaries. Rivulet can scrape full articles:
 # Manual scraping
 rivulet scrape --feed "https://beej.us/blog/rss.xml" --limit 10
 
+# Scrape paid/private sites using a saved authenticated Chrome profile
+rivulet auth add my-site --site "https://example.com/login"
+rivulet auth check my-site --url "https://example.com/account"
+rivulet scrape --auth-profile my-site --limit 10
+
 # Enable automatic background scraping in config
 # ~/.config/rivulet/config.toml
 [scraper]
 enabled = true
 ```
+
+Auth profiles launch a visible Chrome window for manual login. Rivulet stores only profile metadata in SQLite; session cookies remain in the Chrome user data directory under Rivulet's data directory unless you pass `--profile-dir`.
 
 ## Configuration
 
@@ -121,6 +134,10 @@ Customize colors, keybindings, and scraper settings.
 | `Enter` | Select |
 | `r` | Toggle read |
 | `s` | Toggle star |
+| `L` | Toggle queued/read-later |
+| `S` | Toggle saved |
+| `x` | Toggle archived |
+| `a`/`u`/`f`/`l`/`v`/`X` | View all/unread/starred/queued/saved/archived |
 | `o` | Open in browser |
 | `R` | Refresh feeds |
 | `m` | Maximize preview |
