@@ -1,0 +1,35 @@
+Project Summary
+
+  ByteTree Search Service is a Rust-based gRPC search platform for fast discovery of ByteTree resources. It builds a versioned in-memory hybrid index from Redis/etcd: blart ART powers
+  prefix and fuzzy suggestions, while Tantivy handles full-text search, filtering, and batch queries. The service also supports resource resolution, team/provider classification, export
+  flows, health-gated hot reloads, metrics, tracing, and production configuration through TCC/env config.
+
+  The project includes a Python Dorado ingestion pipeline for generating/loading ByteTree data, plus strong engineering harnesses: Testcontainers-based Redis/etcd integration tests, gRPC
+  E2E tests, Criterion benchmarks, synthetic data generation, load testing, and benchmark report tooling.
+
+  Resume-Ready Short Version
+
+  Built ByteTree Search Service, a Rust/Tokio gRPC search platform that indexes ByteTree resource metadata from Redis/etcd into a hot-swappable hybrid search engine using ART prefix/fuzzy
+  lookup and Tantivy full-text search. Developed ingestion, classification, observability, integration-test, benchmark, and load-test harnesses, using AI-assisted coding throughout
+  architecture design, implementation, test generation, debugging, and documentation.
+
+  Shorter Bullet Version
+
+  - Built a Rust gRPC search service for ByteTree resources with versioned Redis/etcd indexing, ART-based prefix/fuzzy suggestions, Tantivy full-text search, team classification,
+    observability, and hot-reload health gating.
+  - Created end-to-end engineering harnesses including Dorado data ingestion, Redis/etcd Testcontainers tests, gRPC E2E coverage, Criterion benchmarks, synthetic data generation, and load-
+    test reporting, leveraging AI-assisted coding across the full development lifecycle.
+
+
+
+ Project Summary
+
+  This project is a PySpark/Hive ownership-mining pipeline that analyzes BPM workflow snapshots and two-day diffs to infer Top-1/Top-N owners for internal database and service resources.
+  It extracts ownership evidence from workflow creators, assignees, and current assignees; applies configurable scoring based on role, operation type, result, ticket type, and review
+  signals; enriches results with service topology metadata; and supports tracing, profiling, local CSV testing, and optional Hive table writes.
+
+  Resume-Ready Version
+
+  Built an AI-assisted PySpark/Hive ownership-mining system that transforms BPM workflow snapshots and diffs into scored Top-N owner registries for database/service resources, with
+  configurable scoring rules, topology enrichment, traceable Spark diagnostics, automated tests, and end-to-end AI coding support across design, implementation, debugging, refactoring, and
+  documentation.
