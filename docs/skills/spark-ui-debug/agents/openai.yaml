@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spark UI Debug"
+  short_description: "Diagnose Spark UI failures and regressions"
+  default_prompt: "Use $spark-ui-debug to diagnose this Spark incident from UI evidence, logs, and Spark configuration."
