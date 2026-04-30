@@ -31,10 +31,17 @@ All notable changes to Rivulet will be documented in this file.
   - System scheduler setup (launchd, systemd, cron, Task Scheduler)
   - Auto-start on login instructions for all platforms
 
+- **Latest tab and refresh batches**
+  - `Alt+1` opens a SQLite-backed Latest tab for recent items
+  - `Alt+2` opens the Reader tab
+  - Refresh runs record inserted item IDs so newly fetched items can be marked `NEW`
+  - Reader feed navigation is available as a collapsible left rail via `\`
+
 ### Changed
 
 - TUI now uses colors and keybindings from config file
 - Status bar updated to show `d:Delete` hint
+- TUI layout now uses top-level Latest/Reader tabs instead of the old vertical three-pane stack
 
 ## [0.1.0] - Initial Release
 

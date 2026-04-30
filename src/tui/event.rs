@@ -9,7 +9,7 @@ pub enum AppEvent {
     Key(KeyEvent),
     Tick,
     RefreshProgress(usize, usize),
-    RefreshComplete(Vec<(i64, Result<usize>)>),
+    RefreshComplete(i64, Vec<(i64, Result<crate::store::FeedRefreshResult>)>),
 }
 
 pub struct EventHandler {
@@ -24,9 +24,10 @@ impl EventHandler {
 
         tokio::spawn(async move {
             loop {
-                let has_event = tokio::task::spawn_blocking(move || {
-                    event::poll(tick_rate).unwrap_or(false)
-                }).await.unwrap_or(false);
+                let has_event =
+                    tokio::task::spawn_blocking(move || event::poll(tick_rate).unwrap_or(false))
+                        .await
+                        .unwrap_or(false);
 
                 if has_event {
                     if let Ok(Event::Key(key)) = event::read() {
@@ -74,9 +75,12 @@ pub enum Action {
     ViewQueued,
     ViewSaved,
     ViewArchived,
+    ViewLatest,
+    ViewReader,
     OpenInBrowser,
     Refresh,
     ToggleMaximize,
+    ToggleFeedPanel,
     DeleteFeed,
     None,
 }

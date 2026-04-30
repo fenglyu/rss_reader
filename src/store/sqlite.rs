@@ -7,7 +7,7 @@ use rusqlite_migration::{Migrations, M};
 
 use crate::app::{Result, RivuletError};
 use crate::domain::{AuthProfile, Feed, FeedUpdate, Item, ItemState};
-use crate::store::{ItemListFilter, Store};
+use crate::store::{AddItemsResult, ItemListFilter, RecentItem, RefreshSource, Store};
 
 pub struct SqliteStore {
     conn: Mutex<Connection>,
@@ -38,6 +38,7 @@ impl SqliteStore {
             M::up(include_str!("../../migrations/002-reading-workflow/up.sql")),
             M::up(include_str!("../../migrations/003-search-index/up.sql")),
             M::up(include_str!("../../migrations/004-auth-profiles/up.sql")),
+            M::up(include_str!("../../migrations/005-refresh-runs/up.sql")),
         ]);
 
         let mut conn = self.conn.lock().map_err(|e| {
@@ -51,6 +52,7 @@ impl SqliteStore {
         migrations
             .to_latest(&mut conn)
             .map_err(|_| RivuletError::Database(rusqlite::Error::InvalidQuery))?;
+        Self::sweep_orphaned_refresh_runs_locked(&conn)?;
 
         Ok(())
     }
@@ -80,6 +82,38 @@ impl SqliteStore {
                 .and_then(|s| Self::parse_datetime(&s))
                 .unwrap_or_else(Utc::now),
         })
+    }
+
+    fn row_to_recent_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecentItem> {
+        let item = Self::row_to_item(row)?;
+        let feed_title = row
+            .get::<_, Option<String>>(9)?
+            .unwrap_or_else(|| "(Unknown feed)".to_string());
+        let is_latest_refresh_item = row.get::<_, i32>(10)? != 0;
+        let arrived_at = row
+            .get::<_, String>(11)
+            .ok()
+            .and_then(|s| Self::parse_datetime(&s))
+            .unwrap_or(item.fetched_at);
+
+        Ok(RecentItem {
+            item,
+            feed_title,
+            is_latest_refresh_item,
+            arrived_at,
+        })
+    }
+
+    fn sweep_orphaned_refresh_runs_locked(conn: &Connection) -> Result<()> {
+        conn.execute(
+            "UPDATE refresh_runs
+             SET completed_at = started_at,
+                 error_count = total_feeds
+             WHERE completed_at IS NULL
+               AND julianday(started_at) < julianday('now', '-1 hour')",
+            [],
+        )?;
+        Ok(())
     }
 
     fn get_items_where(&self, where_clause: Option<&str>) -> Result<Vec<Item>> {
@@ -497,7 +531,7 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    fn add_items(&self, items: &[Item]) -> Result<usize> {
+    fn add_items_with_report(&self, items: &[Item]) -> Result<AddItemsResult> {
         let mut conn = self.conn.lock().map_err(|e| {
             RivuletError::Database(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
@@ -532,10 +566,18 @@ impl Store for SqliteStore {
         }
 
         tx.commit()?;
-        for item_id in inserted_ids {
-            Self::refresh_search_index_for_item_locked(&conn, &item_id)?;
+        for item_id in &inserted_ids {
+            Self::refresh_search_index_for_item_locked(&conn, item_id)?;
         }
-        Ok(count)
+
+        Ok(AddItemsResult {
+            count,
+            inserted_ids,
+        })
+    }
+
+    fn add_items(&self, items: &[Item]) -> Result<usize> {
+        Ok(self.add_items_with_report(items)?.count)
     }
 
     fn get_item(&self, id: &str) -> Result<Option<Item>> {
@@ -587,6 +629,71 @@ impl Store for SqliteStore {
         self.get_items_where(Some(&where_clause))
     }
 
+    fn get_recent_items(
+        &self,
+        filter: ItemListFilter,
+        days: u32,
+        limit: usize,
+        latest_run_id: Option<i64>,
+    ) -> Result<Vec<RecentItem>> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let state_clause = Self::filter_clause(filter, "s");
+        let latest_run_id = latest_run_id.unwrap_or(-1);
+        let days_arg = format!("-{} days", days);
+        let mut recent = Vec::new();
+
+        let batch_sql = format!(
+            "SELECT i.id, i.feed_id, i.title, i.link, i.content, i.summary, i.author,
+                    i.published_at, i.fetched_at, COALESCE(f.title, f.url), 1,
+                    COALESCE(ri.inserted_at, i.fetched_at)
+             FROM refresh_run_items ri
+             JOIN items i ON i.id = ri.item_id
+             JOIN feeds f ON f.id = i.feed_id
+             LEFT JOIN item_state s ON i.id = s.item_id
+             WHERE ri.refresh_run_id = ?1 AND {state_clause}
+             ORDER BY COALESCE(i.published_at, i.fetched_at) DESC, i.fetched_at DESC"
+        );
+        let mut stmt = conn.prepare(&batch_sql)?;
+        recent.extend(
+            stmt.query_map(params![latest_run_id], Self::row_to_recent_item)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+
+        let tail_sql = format!(
+            "SELECT i.id, i.feed_id, i.title, i.link, i.content, i.summary, i.author,
+                    i.published_at, i.fetched_at, COALESCE(f.title, f.url), 0,
+                    i.fetched_at
+             FROM items i
+             JOIN feeds f ON f.id = i.feed_id
+             LEFT JOIN item_state s ON i.id = s.item_id
+             WHERE {state_clause}
+               AND julianday(i.fetched_at) >= julianday('now', ?2)
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM refresh_run_items ri
+                   WHERE ri.refresh_run_id = ?1 AND ri.item_id = i.id
+               )
+             ORDER BY COALESCE(i.published_at, i.fetched_at) DESC, i.fetched_at DESC
+             LIMIT ?3"
+        );
+        let mut stmt = conn.prepare(&tail_sql)?;
+        recent.extend(
+            stmt.query_map(
+                params![latest_run_id, days_arg, limit as i64],
+                Self::row_to_recent_item,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+
+        Ok(recent)
+    }
+
     fn search_items(&self, query: &str, filter: ItemListFilter, limit: usize) -> Result<Vec<Item>> {
         if query.trim().is_empty() || limit == 0 {
             return Ok(Vec::new());
@@ -633,6 +740,103 @@ impl Store for SqliteStore {
         )?;
 
         Ok(count > 0)
+    }
+
+    fn begin_refresh_run(&self, source: RefreshSource, total_feeds: usize) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        conn.execute(
+            "INSERT INTO refresh_runs (started_at, total_feeds, source)
+             VALUES (?1, ?2, ?3)",
+            params![Utc::now().to_rfc3339(), total_feeds as i64, source.as_str()],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    fn complete_refresh_run(
+        &self,
+        run_id: i64,
+        new_item_count: usize,
+        error_count: usize,
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        conn.execute(
+            "UPDATE refresh_runs
+             SET completed_at = ?1,
+                 new_item_count = ?2,
+                 error_count = ?3
+             WHERE id = ?4",
+            params![
+                Utc::now().to_rfc3339(),
+                new_item_count as i64,
+                error_count as i64,
+                run_id
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn record_refresh_run_items(
+        &self,
+        run_id: i64,
+        feed_id: i64,
+        item_ids: &[String],
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let tx = conn.transaction()?;
+        for item_id in item_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO refresh_run_items
+                    (refresh_run_id, item_id, feed_id, inserted_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![run_id, item_id, feed_id, Utc::now().to_rfc3339()],
+            )?;
+        }
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    fn get_latest_refresh_run_id(&self) -> Result<Option<i64>> {
+        let conn = self.conn.lock().map_err(|e| {
+            RivuletError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        })?;
+
+        let run_id = conn
+            .query_row(
+                "SELECT id
+                 FROM refresh_runs
+                 WHERE completed_at IS NOT NULL
+                 ORDER BY completed_at DESC, id DESC
+                 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(run_id)
     }
 
     fn get_item_state(&self, item_id: &str) -> Result<Option<ItemState>> {
@@ -1032,6 +1236,128 @@ mod tests {
 
         let stored = store.get_items_by_feed(feed_id).unwrap();
         assert_eq!(stored.len(), 3);
+    }
+
+    #[test]
+    fn test_add_items_with_report_returns_only_inserted_ids() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let items: Vec<Item> = (0..2)
+            .map(|i| {
+                Item::new(
+                    feed_id,
+                    "https://example.com/feed.xml",
+                    &format!("entry-{}", i),
+                )
+            })
+            .collect();
+
+        let first = store.add_items_with_report(&items).unwrap();
+        assert_eq!(first.count, 2);
+        assert_eq!(
+            first.inserted_ids,
+            vec![items[0].id.clone(), items[1].id.clone()]
+        );
+
+        let second = store.add_items_with_report(&items).unwrap();
+        assert_eq!(second.count, 0);
+        assert!(second.inserted_ids.is_empty());
+    }
+
+    #[test]
+    fn test_refresh_run_round_trip_and_recent_items_ordering() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let mut latest_a = Item::new(feed_id, "https://example.com/feed.xml", "latest-a");
+        latest_a.title = Some("Latest A".into());
+        latest_a.published_at = Some(Utc::now() - chrono::Duration::days(20));
+        let mut latest_b = Item::new(feed_id, "https://example.com/feed.xml", "latest-b");
+        latest_b.title = Some("Latest B".into());
+        latest_b.published_at = Some(Utc::now() - chrono::Duration::days(19));
+        let mut tail = Item::new(feed_id, "https://example.com/feed.xml", "tail");
+        tail.title = Some("Tail".into());
+        tail.published_at = Some(Utc::now());
+
+        let report = store
+            .add_items_with_report(&[latest_a.clone(), latest_b.clone(), tail.clone()])
+            .unwrap();
+        assert_eq!(report.count, 3);
+
+        let run_id = store.begin_refresh_run(RefreshSource::Tui, 1).unwrap();
+        store
+            .record_refresh_run_items(run_id, feed_id, &[latest_a.id.clone(), latest_b.id.clone()])
+            .unwrap();
+        store.complete_refresh_run(run_id, 2, 0).unwrap();
+
+        assert_eq!(store.get_latest_refresh_run_id().unwrap(), Some(run_id));
+
+        let recent = store
+            .get_recent_items(ItemListFilter::All, 7, 1, Some(run_id))
+            .unwrap();
+        assert_eq!(recent.len(), 3);
+        assert!(recent[0].is_latest_refresh_item);
+        assert!(recent[1].is_latest_refresh_item);
+        assert!(!recent[2].is_latest_refresh_item);
+        assert_eq!(recent[2].item.id, tail.id);
+    }
+
+    #[test]
+    fn test_recent_items_respects_filters() {
+        let store = SqliteStore::in_memory().unwrap();
+        let feed = Feed::new("https://example.com/feed.xml".into());
+        let feed_id = store.add_feed(&feed).unwrap();
+
+        let starred = Item::new(feed_id, "https://example.com/feed.xml", "starred");
+        let plain = Item::new(feed_id, "https://example.com/feed.xml", "plain");
+        store
+            .add_items_with_report(&[starred.clone(), plain.clone()])
+            .unwrap();
+        store.set_starred(&starred.id, true).unwrap();
+
+        let run_id = store.begin_refresh_run(RefreshSource::Tui, 1).unwrap();
+        store
+            .record_refresh_run_items(run_id, feed_id, &[starred.id.clone(), plain.id.clone()])
+            .unwrap();
+        store.complete_refresh_run(run_id, 2, 0).unwrap();
+
+        let recent = store
+            .get_recent_items(ItemListFilter::Starred, 7, 10, Some(run_id))
+            .unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].item.id, starred.id);
+        assert!(recent[0].is_latest_refresh_item);
+    }
+
+    #[test]
+    fn test_sweep_orphaned_refresh_runs_marks_stale_runs_failed() {
+        let store = SqliteStore::in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO refresh_runs (started_at, total_feeds, source)
+             VALUES (?1, ?2, ?3)",
+            params![
+                (Utc::now() - chrono::Duration::hours(2)).to_rfc3339(),
+                3_i64,
+                RefreshSource::Cli.as_str()
+            ],
+        )
+        .unwrap();
+        let run_id = conn.last_insert_rowid();
+        SqliteStore::sweep_orphaned_refresh_runs_locked(&conn).unwrap();
+
+        let (completed_at, error_count): (Option<String>, i64) = conn
+            .query_row(
+                "SELECT completed_at, error_count FROM refresh_runs WHERE id = ?1",
+                params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(completed_at.is_some());
+        assert_eq!(error_count, 3);
     }
 
     #[test]

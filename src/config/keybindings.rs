@@ -28,9 +28,12 @@ pub struct KeybindingConfig {
     pub view_queued: Vec<String>,
     pub view_saved: Vec<String>,
     pub view_archived: Vec<String>,
+    pub view_latest: Vec<String>,
+    pub view_reader: Vec<String>,
     pub open_in_browser: Vec<String>,
     pub refresh: Vec<String>,
     pub toggle_maximize: Vec<String>,
+    pub toggle_feed_panel: Vec<String>,
     pub delete_feed: Vec<String>,
 }
 
@@ -56,9 +59,12 @@ impl Default for KeybindingConfig {
             view_queued: vec!["l".to_string()],
             view_saved: vec!["v".to_string()],
             view_archived: vec!["X".to_string()],
+            view_latest: vec!["Alt+1".to_string()],
+            view_reader: vec!["Alt+2".to_string()],
             open_in_browser: vec!["o".to_string()],
             refresh: vec!["R".to_string()],
             toggle_maximize: vec!["m".to_string()],
+            toggle_feed_panel: vec!["\\".to_string()],
             delete_feed: vec!["d".to_string(), "Delete".to_string()],
         }
     }
@@ -105,12 +111,18 @@ impl KeybindingConfig {
             Action::ViewSaved
         } else if self.matches_key(key, &self.view_archived) {
             Action::ViewArchived
+        } else if self.matches_key(key, &self.view_latest) {
+            Action::ViewLatest
+        } else if self.matches_key(key, &self.view_reader) {
+            Action::ViewReader
         } else if self.matches_key(key, &self.open_in_browser) {
             Action::OpenInBrowser
         } else if self.matches_key(key, &self.refresh) {
             Action::Refresh
         } else if self.matches_key(key, &self.toggle_maximize) {
             Action::ToggleMaximize
+        } else if self.matches_key(key, &self.toggle_feed_panel) {
+            Action::ToggleFeedPanel
         } else if self.matches_key(key, &self.delete_feed) {
             Action::DeleteFeed
         } else {
@@ -342,5 +354,17 @@ mod tests {
 
         let key = KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE);
         assert_eq!(config.get_action(&key), Action::ViewArchived);
+
+        let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT);
+        assert_eq!(config.get_action(&key), Action::ViewLatest);
+
+        let key = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT);
+        assert_eq!(config.get_action(&key), Action::ViewReader);
+
+        let key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ToggleFeedPanel);
+
+        let key = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT);
+        assert_eq!(config.get_action(&key), Action::Refresh);
     }
 }

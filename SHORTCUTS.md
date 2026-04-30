@@ -10,6 +10,8 @@
 | `p` / `PageUp` | Jump up 10 items |
 | `Tab` | Switch to next pane (Feeds → Items → Preview) |
 | `Shift+Tab` | Switch to previous pane |
+| `Alt+1` | Switch to Latest tab |
+| `Alt+2` | Switch to Reader tab |
 
 ## Actions
 
@@ -23,6 +25,7 @@
 | `x` | Toggle archived |
 | `o` | Open item link in browser (marks as read) |
 | `R` | Refresh all feeds |
+| `\` | Expand/collapse the Reader feed rail |
 
 ## Views
 
@@ -48,18 +51,22 @@
 | `q` | Quit |
 | `Ctrl+C` | Quit |
 
-## Panes
+## Layout
 
 ```
-┌─────────────────────────────────────┐
-│   FEEDS PANE                        │  ← List of subscribed feeds
-├─────────────────────────────────────┤
-│   ITEMS PANE                        │  ← Articles from selected feed
-├─────────────────────────────────────┤
-│   PREVIEW PANE                      │  ← Article content
-├─────────────────────────────────────┤
-│   STATUS BAR                        │  ← Shortcuts hint
-└─────────────────────────────────────┘
+┌───────────────────────────────────────────────┐
+│ [ Latest ] [ Reader ]                         │
+├───────────────┬───────────────────────────────┤
+│ Latest items  │ Article content               │
+├───────────────┴───────────────────────────────┤
+│ STATUS BAR                                    │
+└───────────────────────────────────────────────┘
+
+Reader tab:
+┌────┬───────────────┬──────────────────────────┐
+│Feed│ Feed items    │ Article content          │
+│rail│               │                          │
+└────┴───────────────┴──────────────────────────┘
 ```
 
 ## Item Markers
@@ -72,6 +79,7 @@
 | `S` | Saved item |
 | `x` | Archived item |
 | ` ` | Read item (no marker) |
+| `NEW` | Inserted by the latest recorded refresh run |
 
 ## CLI Options
 

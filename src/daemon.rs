@@ -14,7 +14,7 @@ use chrono::{Local, Utc};
 use tokio::time::interval;
 
 use crate::app::AppContext;
-use crate::store::Store;
+use crate::store::{RefreshSource, Store};
 
 /// Daemon configuration
 #[derive(Debug, Clone)]
@@ -264,6 +264,18 @@ impl Daemon {
                     return;
                 }
 
+                let run_id = match self
+                    .ctx
+                    .store
+                    .begin_refresh_run(RefreshSource::Daemon, feeds.len())
+                {
+                    Ok(run_id) => run_id,
+                    Err(e) => {
+                        self.log(&format!("Failed to start refresh run: {}", e));
+                        return;
+                    }
+                };
+
                 let results = self
                     .ctx
                     .parallel_fetcher
@@ -275,13 +287,20 @@ impl Daemon {
 
                 for (feed_id, result) in results {
                     match result {
-                        Ok(count) => {
-                            total_new += count;
-                            if count > 0 {
+                        Ok(refresh) => {
+                            total_new += refresh.new_count;
+                            if let Err(e) = self.ctx.store.record_refresh_run_items(
+                                run_id,
+                                feed_id,
+                                &refresh.inserted_item_ids,
+                            ) {
+                                self.log(&format!("  Error recording refresh items: {}", e));
+                            }
+                            if refresh.new_count > 0 {
                                 if let Ok(Some(feed)) = self.ctx.store.get_feed(feed_id) {
                                     self.log(&format!(
                                         "  {} new items from {}",
-                                        count,
+                                        refresh.new_count,
                                         feed.display_title()
                                     ));
                                 }
@@ -298,6 +317,13 @@ impl Daemon {
                             }
                         }
                     }
+                }
+                if let Err(e) = self
+                    .ctx
+                    .store
+                    .complete_refresh_run(run_id, total_new, errors)
+                {
+                    self.log(&format!("Failed to complete refresh run: {}", e));
                 }
 
                 let elapsed = Utc::now().signed_duration_since(start);

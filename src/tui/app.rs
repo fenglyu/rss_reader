@@ -1,13 +1,25 @@
 use ratatui::widgets::ListState;
 
 use crate::domain::{Feed, Item, ItemState};
-use crate::store::ItemListFilter;
+use crate::store::{ItemListFilter, RecentItem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivePane {
     Feeds,
     Items,
     Preview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppTab {
+    Latest,
+    Reader,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedPanelState {
+    Collapsed,
+    Expanded,
 }
 
 impl ActivePane {
@@ -65,12 +77,16 @@ impl ItemView {
 pub const PAGE_SIZE: usize = 10;
 
 pub struct TuiApp {
+    pub active_tab: AppTab,
     pub active_pane: ActivePane,
+    pub feed_panel: FeedPanelState,
     pub feeds: Vec<Feed>,
     pub items: Vec<Item>,
+    pub latest_items: Vec<RecentItem>,
     pub item_states: std::collections::HashMap<String, ItemState>,
     pub feed_index: usize,
     pub item_index: usize,
+    pub latest_index: usize,
     pub item_view: ItemView,
     pub preview_scroll: u16,
     pub should_quit: bool,
@@ -82,6 +98,10 @@ pub struct TuiApp {
     // List states for scrolling
     pub feed_list_state: ListState,
     pub item_list_state: ListState,
+    pub latest_list_state: ListState,
+    pub latest_run_id: Option<i64>,
+    pub recent_days: u32,
+    pub recent_limit: usize,
     // Pending delete confirmation (feed_id, feed_title)
     pub pending_delete: Option<(i64, String)>,
 }
@@ -92,14 +112,20 @@ impl TuiApp {
         feed_list_state.select(Some(0));
         let mut item_list_state = ListState::default();
         item_list_state.select(Some(0));
+        let mut latest_list_state = ListState::default();
+        latest_list_state.select(Some(0));
 
         Self {
-            active_pane: ActivePane::Feeds,
+            active_tab: AppTab::Latest,
+            active_pane: ActivePane::Items,
+            feed_panel: FeedPanelState::Collapsed,
             feeds: Vec::new(),
             items: Vec::new(),
+            latest_items: Vec::new(),
             item_states: std::collections::HashMap::new(),
             feed_index: 0,
             item_index: 0,
+            latest_index: 0,
             item_view: ItemView::All,
             preview_scroll: 0,
             should_quit: false,
@@ -109,6 +135,10 @@ impl TuiApp {
             maximized: false,
             feed_list_state,
             item_list_state,
+            latest_list_state,
+            latest_run_id: None,
+            recent_days: 7,
+            recent_limit: 200,
             pending_delete: None,
         }
     }
@@ -119,6 +149,19 @@ impl TuiApp {
 
     pub fn selected_item(&self) -> Option<&Item> {
         self.items.get(self.item_index)
+    }
+
+    pub fn selected_latest_item(&self) -> Option<&Item> {
+        self.latest_items
+            .get(self.latest_index)
+            .map(|recent| &recent.item)
+    }
+
+    pub fn selected_item_for_active_tab(&self) -> Option<&Item> {
+        match self.active_tab {
+            AppTab::Latest => self.selected_latest_item(),
+            AppTab::Reader => self.selected_item(),
+        }
     }
 
     pub fn is_item_read(&self, item_id: &str) -> bool {
@@ -164,13 +207,22 @@ impl TuiApp {
                     self.feed_list_state.select(Some(self.feed_index));
                 }
             }
-            ActivePane::Items => {
-                if self.item_index > 0 {
-                    self.item_index -= 1;
-                    self.item_list_state.select(Some(self.item_index));
-                    self.preview_scroll = 0;
+            ActivePane::Items => match self.active_tab {
+                AppTab::Latest => {
+                    if self.latest_index > 0 {
+                        self.latest_index -= 1;
+                        self.latest_list_state.select(Some(self.latest_index));
+                        self.preview_scroll = 0;
+                    }
                 }
-            }
+                AppTab::Reader => {
+                    if self.item_index > 0 {
+                        self.item_index -= 1;
+                        self.item_list_state.select(Some(self.item_index));
+                        self.preview_scroll = 0;
+                    }
+                }
+            },
             ActivePane::Preview => {
                 if self.preview_scroll > 0 {
                     self.preview_scroll = self.preview_scroll.saturating_sub(1);
@@ -187,13 +239,24 @@ impl TuiApp {
                     self.feed_list_state.select(Some(self.feed_index));
                 }
             }
-            ActivePane::Items => {
-                if !self.items.is_empty() && self.item_index < self.items.len() - 1 {
-                    self.item_index += 1;
-                    self.item_list_state.select(Some(self.item_index));
-                    self.preview_scroll = 0;
+            ActivePane::Items => match self.active_tab {
+                AppTab::Latest => {
+                    if !self.latest_items.is_empty()
+                        && self.latest_index < self.latest_items.len() - 1
+                    {
+                        self.latest_index += 1;
+                        self.latest_list_state.select(Some(self.latest_index));
+                        self.preview_scroll = 0;
+                    }
                 }
-            }
+                AppTab::Reader => {
+                    if !self.items.is_empty() && self.item_index < self.items.len() - 1 {
+                        self.item_index += 1;
+                        self.item_list_state.select(Some(self.item_index));
+                        self.preview_scroll = 0;
+                    }
+                }
+            },
             ActivePane::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_add(1);
             }
@@ -210,15 +273,26 @@ impl TuiApp {
                     self.feed_list_state.select(Some(self.feed_index));
                 }
             }
-            ActivePane::Items => {
-                let max_index = self.items.len().saturating_sub(1);
-                let new_index = (self.item_index + PAGE_SIZE).min(max_index);
-                if new_index != self.item_index {
-                    self.item_index = new_index;
-                    self.item_list_state.select(Some(self.item_index));
-                    self.preview_scroll = 0;
+            ActivePane::Items => match self.active_tab {
+                AppTab::Latest => {
+                    let max_index = self.latest_items.len().saturating_sub(1);
+                    let new_index = (self.latest_index + PAGE_SIZE).min(max_index);
+                    if new_index != self.latest_index {
+                        self.latest_index = new_index;
+                        self.latest_list_state.select(Some(self.latest_index));
+                        self.preview_scroll = 0;
+                    }
                 }
-            }
+                AppTab::Reader => {
+                    let max_index = self.items.len().saturating_sub(1);
+                    let new_index = (self.item_index + PAGE_SIZE).min(max_index);
+                    if new_index != self.item_index {
+                        self.item_index = new_index;
+                        self.item_list_state.select(Some(self.item_index));
+                        self.preview_scroll = 0;
+                    }
+                }
+            },
             ActivePane::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_add(PAGE_SIZE as u16);
             }
@@ -234,14 +308,24 @@ impl TuiApp {
                     self.feed_list_state.select(Some(self.feed_index));
                 }
             }
-            ActivePane::Items => {
-                let new_index = self.item_index.saturating_sub(PAGE_SIZE);
-                if new_index != self.item_index {
-                    self.item_index = new_index;
-                    self.item_list_state.select(Some(self.item_index));
-                    self.preview_scroll = 0;
+            ActivePane::Items => match self.active_tab {
+                AppTab::Latest => {
+                    let new_index = self.latest_index.saturating_sub(PAGE_SIZE);
+                    if new_index != self.latest_index {
+                        self.latest_index = new_index;
+                        self.latest_list_state.select(Some(self.latest_index));
+                        self.preview_scroll = 0;
+                    }
                 }
-            }
+                AppTab::Reader => {
+                    let new_index = self.item_index.saturating_sub(PAGE_SIZE);
+                    if new_index != self.item_index {
+                        self.item_index = new_index;
+                        self.item_list_state.select(Some(self.item_index));
+                        self.preview_scroll = 0;
+                    }
+                }
+            },
             ActivePane::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_sub(PAGE_SIZE as u16);
             }

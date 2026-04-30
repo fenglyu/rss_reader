@@ -61,10 +61,20 @@ view_starred = ["f"]
 view_queued = ["l"]
 view_saved = ["v"]
 view_archived = ["X"]
+view_latest = ["Alt+1"]
+view_reader = ["Alt+2"]
 open_in_browser = ["o"]
 refresh = ["R"]
 toggle_maximize = ["m"]
+toggle_feed_panel = ["\\"]
 delete_feed = ["d", "Delete"]
+
+[ui.latest]
+# Number of days included in the Latest tab
+days = 7
+
+# Maximum older recent items shown below the latest refresh batch
+limit = 200
 
 [scraper]
 # Enable automatic background scraping for new items

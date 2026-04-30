@@ -131,6 +131,7 @@ Customize colors, keybindings, and scraper settings.
 |-----|--------|
 | `j`/`k` | Move down/up |
 | `Tab` | Next pane |
+| `Alt+1`/`Alt+2` | Switch Latest/Reader tabs |
 | `Enter` | Select |
 | `r` | Toggle read |
 | `s` | Toggle star |
@@ -140,6 +141,7 @@ Customize colors, keybindings, and scraper settings.
 | `a`/`u`/`f`/`l`/`v`/`X` | View all/unread/starred/queued/saved/archived |
 | `o` | Open in browser |
 | `R` | Refresh feeds |
+| `\` | Expand/collapse feed rail |
 | `m` | Maximize preview |
 | `q` | Quit |
 

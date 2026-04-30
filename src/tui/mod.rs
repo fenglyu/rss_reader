@@ -16,9 +16,9 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use crate::app::{AppContext, Result};
 use crate::config::Config;
 use crate::scraper::{ChromeScraper, Scraper};
-use crate::store::Store;
+use crate::store::{RefreshSource, Store};
 
-use self::app::{ActivePane, ItemView, TuiApp};
+use self::app::{ActivePane, AppTab, FeedPanelState, ItemView, TuiApp};
 use self::event::{Action, AppEvent, EventHandler};
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -48,11 +48,14 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
 
 async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) -> Result<()> {
     let mut tui_app = TuiApp::new();
+    tui_app.recent_days = config.ui.latest.days;
+    tui_app.recent_limit = config.ui.latest.limit;
     let mut event_handler = EventHandler::new(Duration::from_millis(100));
 
     // Load initial data
     load_feeds(&mut tui_app, &ctx)?;
     load_current_items(&mut tui_app, &ctx)?;
+    load_latest_items(&mut tui_app, &ctx)?;
 
     loop {
         terminal.draw(|frame| layout::render(frame, &mut tui_app, &config.colors))?;
@@ -71,6 +74,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                             ctx.store.delete_feed(feed_id)?;
                             load_feeds(&mut tui_app, &ctx)?;
                             load_current_items(&mut tui_app, &ctx)?;
+                            load_latest_items(&mut tui_app, &ctx)?;
                             tui_app.set_status(format!("Deleted feed: {}", feed_title));
                         }
                         _ => {
@@ -101,13 +105,15 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         tui_app.toggle_maximize();
                     }
                     Action::NextPane => {
-                        tui_app.active_pane = tui_app.active_pane.next();
+                        tui_app.active_pane = next_pane_for_tab(&tui_app);
                     }
                     Action::PrevPane => {
-                        tui_app.active_pane = tui_app.active_pane.prev();
+                        tui_app.active_pane = prev_pane_for_tab(&tui_app);
                     }
                     Action::Select => {
-                        if tui_app.active_pane == ActivePane::Feeds {
+                        if tui_app.active_tab == AppTab::Reader
+                            && tui_app.active_pane == ActivePane::Feeds
+                        {
                             let feed_id = tui_app.selected_feed().map(|f| f.id);
                             if let Some(feed_id) = feed_id {
                                 load_items_for_feed(&mut tui_app, &ctx, feed_id)?;
@@ -116,7 +122,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         }
                     }
                     Action::ToggleRead => {
-                        if let Some(item) = tui_app.selected_item() {
+                        if let Some(item) = tui_app.selected_item_for_active_tab() {
                             let item_id = item.id.clone();
                             let is_read = tui_app.is_item_read(&item_id);
                             ctx.store.set_read(&item_id, !is_read)?;
@@ -126,7 +132,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         }
                     }
                     Action::ToggleStar => {
-                        if let Some(item) = tui_app.selected_item() {
+                        if let Some(item) = tui_app.selected_item_for_active_tab() {
                             let item_id = item.id.clone();
                             let is_starred = tui_app.is_item_starred(&item_id);
                             ctx.store.set_starred(&item_id, !is_starred)?;
@@ -136,7 +142,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         }
                     }
                     Action::ToggleQueued => {
-                        if let Some(item) = tui_app.selected_item() {
+                        if let Some(item) = tui_app.selected_item_for_active_tab() {
                             let item_id = item.id.clone();
                             let is_queued = tui_app.is_item_queued(&item_id);
                             ctx.store.set_queued(&item_id, !is_queued)?;
@@ -146,7 +152,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         }
                     }
                     Action::ToggleSaved => {
-                        if let Some(item) = tui_app.selected_item() {
+                        if let Some(item) = tui_app.selected_item_for_active_tab() {
                             let item_id = item.id.clone();
                             let is_saved = tui_app.is_item_saved(&item_id);
                             ctx.store.set_saved(&item_id, !is_saved)?;
@@ -156,7 +162,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         }
                     }
                     Action::ToggleArchived => {
-                        if let Some(item) = tui_app.selected_item() {
+                        if let Some(item) = tui_app.selected_item_for_active_tab() {
                             let item_id = item.id.clone();
                             let is_archived = tui_app.is_item_archived(&item_id);
                             ctx.store.set_archived(&item_id, !is_archived)?;
@@ -171,8 +177,18 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                     Action::ViewQueued => set_item_view(&mut tui_app, &ctx, ItemView::Queued)?,
                     Action::ViewSaved => set_item_view(&mut tui_app, &ctx, ItemView::Saved)?,
                     Action::ViewArchived => set_item_view(&mut tui_app, &ctx, ItemView::Archived)?,
+                    Action::ViewLatest => {
+                        tui_app.active_tab = AppTab::Latest;
+                        tui_app.active_pane = ActivePane::Items;
+                        load_latest_items(&mut tui_app, &ctx)?;
+                    }
+                    Action::ViewReader => {
+                        tui_app.active_tab = AppTab::Reader;
+                        tui_app.active_pane = ActivePane::Items;
+                        load_current_items(&mut tui_app, &ctx)?;
+                    }
                     Action::OpenInBrowser => {
-                        if let Some(item) = tui_app.selected_item() {
+                        if let Some(item) = tui_app.selected_item_for_active_tab() {
                             if let Some(link) = &item.link {
                                 if let Err(e) = open::that(link) {
                                     tui_app.set_status(format!("Failed to open browser: {}", e));
@@ -191,18 +207,20 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         if !tui_app.is_refreshing {
                             tui_app.is_refreshing = true;
                             tui_app.refresh_progress = (0, 0);
-                            
+
                             let tx = event_handler.get_tx();
                             let ctx_clone = ctx.clone();
-                            
-                            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(usize, usize)>();
+
+                            let (progress_tx, mut progress_rx) =
+                                tokio::sync::mpsc::unbounded_channel::<(usize, usize)>();
                             let tx_clone = tx.clone();
                             tokio::spawn(async move {
                                 while let Some((current, total)) = progress_rx.recv().await {
-                                    let _ = tx_clone.send(AppEvent::RefreshProgress(current, total));
+                                    let _ =
+                                        tx_clone.send(AppEvent::RefreshProgress(current, total));
                                 }
                             });
-                            
+
                             tokio::spawn(async move {
                                 let feeds = match ctx_clone.store.get_all_feeds() {
                                     Ok(f) => f,
@@ -211,18 +229,53 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                                         return;
                                     }
                                 };
-                                
+                                let run_id = match ctx_clone
+                                    .store
+                                    .begin_refresh_run(RefreshSource::Tui, feeds.len())
+                                {
+                                    Ok(run_id) => run_id,
+                                    Err(e) => {
+                                        tracing::error!("Failed to start refresh run: {}", e);
+                                        return;
+                                    }
+                                };
+
                                 let results = ctx_clone
                                     .parallel_fetcher
-                                    .fetch_all(feeds, ctx_clone.store.clone(), &ctx_clone.normalizer, Some(progress_tx))
+                                    .fetch_all(
+                                        feeds,
+                                        ctx_clone.store.clone(),
+                                        &ctx_clone.normalizer,
+                                        Some(progress_tx),
+                                    )
                                     .await;
-                                
-                                let _ = tx.send(AppEvent::RefreshComplete(results));
+
+                                let _ = tx.send(AppEvent::RefreshComplete(run_id, results));
                             });
                         }
                     }
+                    Action::ToggleFeedPanel => {
+                        if tui_app.active_tab == AppTab::Reader {
+                            tui_app.feed_panel = match tui_app.feed_panel {
+                                FeedPanelState::Collapsed => {
+                                    tui_app.active_pane = ActivePane::Feeds;
+                                    FeedPanelState::Expanded
+                                }
+                                FeedPanelState::Expanded => {
+                                    tui_app.active_pane = ActivePane::Items;
+                                    FeedPanelState::Collapsed
+                                }
+                            };
+                        } else {
+                            tui_app.set_status(
+                                "Feed panel is Reader-only - press Alt+2 to switch".to_string(),
+                            );
+                        }
+                    }
                     Action::DeleteFeed => {
-                        if tui_app.active_pane == ActivePane::Feeds {
+                        if tui_app.active_tab == AppTab::Reader
+                            && tui_app.active_pane == ActivePane::Feeds
+                        {
                             if let Some(feed) = tui_app.selected_feed() {
                                 let feed_id = feed.id;
                                 let feed_title = feed.display_title().to_string();
@@ -239,26 +292,34 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
             AppEvent::RefreshProgress(current, total) => {
                 tui_app.refresh_progress = (current, total);
             }
-            AppEvent::RefreshComplete(results) => {
+            AppEvent::RefreshComplete(run_id, results) => {
                 let mut total_new = 0;
+                let mut errors = 0;
                 let mut updated_feed_ids = Vec::new();
                 for (feed_id, result) in results {
-                    if let Ok(count) = result {
-                        total_new += count;
-                        if count > 0 {
+                    if let Ok(refresh) = result {
+                        total_new += refresh.new_count;
+                        ctx.store.record_refresh_run_items(
+                            run_id,
+                            feed_id,
+                            &refresh.inserted_item_ids,
+                        )?;
+                        if refresh.new_count > 0 {
                             updated_feed_ids.push(feed_id);
                         }
+                    } else {
+                        errors += 1;
                     }
                 }
+                ctx.store.complete_refresh_run(run_id, total_new, errors)?;
 
                 // Queue items for background scraping (non-blocking)
                 if ctx.scraper_handle.is_some() && !updated_feed_ids.is_empty() {
                     let mut items_to_scrape = Vec::new();
                     for feed_id in updated_feed_ids {
                         if let Ok(items) = ctx.store.get_items_by_feed(feed_id) {
-                            items_to_scrape.extend(
-                                items.into_iter().filter(ChromeScraper::needs_scraping),
-                            );
+                            items_to_scrape
+                                .extend(items.into_iter().filter(ChromeScraper::needs_scraping));
                         }
                     }
                     if !items_to_scrape.is_empty() {
@@ -271,6 +332,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
 
                 load_feeds(&mut tui_app, &ctx)?;
                 load_current_items(&mut tui_app, &ctx)?;
+                load_latest_items(&mut tui_app, &ctx)?;
 
                 tui_app.is_refreshing = false;
                 tui_app.set_status(format!("Refreshed: {} new items", total_new));
@@ -296,24 +358,39 @@ fn load_feeds(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
 
 fn load_current_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     tui_app.items = ctx.store.get_items_by_filter(tui_app.item_view.filter())?;
-    tui_app.item_states.clear();
-    for item in &tui_app.items {
-        if let Some(state) = ctx.store.get_item_state(&item.id)? {
-            tui_app.item_states.insert(item.id.clone(), state);
-        }
-    }
     if tui_app.item_index >= tui_app.items.len() && !tui_app.items.is_empty() {
         tui_app.item_index = tui_app.items.len() - 1;
     }
     tui_app.item_list_state.select(Some(tui_app.item_index));
+    reload_item_states(tui_app, ctx)?;
+    Ok(())
+}
+
+fn load_latest_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    tui_app.latest_run_id = ctx.store.get_latest_refresh_run_id()?;
+    tui_app.latest_items = ctx.store.get_recent_items(
+        tui_app.item_view.filter(),
+        tui_app.recent_days,
+        tui_app.recent_limit,
+        tui_app.latest_run_id,
+    )?;
+    if tui_app.latest_index >= tui_app.latest_items.len() && !tui_app.latest_items.is_empty() {
+        tui_app.latest_index = tui_app.latest_items.len() - 1;
+    }
+    tui_app.latest_list_state.select(Some(tui_app.latest_index));
+    reload_item_states(tui_app, ctx)?;
     Ok(())
 }
 
 fn set_item_view(tui_app: &mut TuiApp, ctx: &AppContext, view: ItemView) -> Result<()> {
     tui_app.item_view = view;
     tui_app.item_index = 0;
+    tui_app.latest_index = 0;
     tui_app.preview_scroll = 0;
-    load_current_items(tui_app, ctx)?;
+    match tui_app.active_tab {
+        AppTab::Latest => load_latest_items(tui_app, ctx)?,
+        AppTab::Reader => load_current_items(tui_app, ctx)?,
+    }
     tui_app.active_pane = ActivePane::Items;
     tui_app.set_status(format!("Showing {} items", view.label()));
     Ok(())
@@ -323,14 +400,61 @@ fn load_items_for_feed(tui_app: &mut TuiApp, ctx: &AppContext, feed_id: i64) -> 
     tui_app.item_view = ItemView::All;
     tui_app.items = ctx.store.get_items_by_feed(feed_id)?;
     tui_app.item_index = 0;
+    tui_app.item_list_state.select(Some(0));
+    reload_item_states(tui_app, ctx)?;
+    Ok(())
+}
+
+fn reload_item_states(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    let mut ids: Vec<String> = tui_app.items.iter().map(|item| item.id.clone()).collect();
+    ids.extend(
+        tui_app
+            .latest_items
+            .iter()
+            .map(|recent| recent.item.id.clone()),
+    );
+    ids.sort();
+    ids.dedup();
+
     tui_app.item_states.clear();
-    for item in &tui_app.items {
-        if let Some(state) = ctx.store.get_item_state(&item.id)? {
-            tui_app.item_states.insert(item.id.clone(), state);
+    for item_id in ids {
+        if let Some(state) = ctx.store.get_item_state(&item_id)? {
+            tui_app.item_states.insert(item_id, state);
         }
     }
-    tui_app.item_list_state.select(Some(0));
     Ok(())
+}
+
+fn next_pane_for_tab(tui_app: &TuiApp) -> ActivePane {
+    match tui_app.active_tab {
+        AppTab::Latest => match tui_app.active_pane {
+            ActivePane::Items => ActivePane::Preview,
+            _ => ActivePane::Items,
+        },
+        AppTab::Reader => match tui_app.feed_panel {
+            FeedPanelState::Expanded => tui_app.active_pane.next(),
+            FeedPanelState::Collapsed => match tui_app.active_pane {
+                ActivePane::Items => ActivePane::Preview,
+                _ => ActivePane::Items,
+            },
+        },
+    }
+}
+
+fn prev_pane_for_tab(tui_app: &TuiApp) -> ActivePane {
+    match tui_app.active_tab {
+        AppTab::Latest => match tui_app.active_pane {
+            ActivePane::Preview => ActivePane::Items,
+            _ => ActivePane::Preview,
+        },
+        AppTab::Reader => match tui_app.feed_panel {
+            FeedPanelState::Expanded => tui_app.active_pane.prev(),
+            FeedPanelState::Collapsed => match tui_app.active_pane {
+                ActivePane::Preview => ActivePane::Items,
+                _ => ActivePane::Preview,
+            },
+        },
+    }
 }
 
 fn update_item_state(

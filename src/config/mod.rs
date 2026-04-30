@@ -22,6 +22,29 @@ pub struct Config {
     pub colors: ColorConfig,
     pub keybindings: KeybindingConfig,
     pub scraper: ScraperConfig,
+    pub ui: UiConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct UiConfig {
+    pub latest: LatestConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LatestConfig {
+    pub days: u32,
+    pub limit: usize,
+}
+
+impl Default for LatestConfig {
+    fn default() -> Self {
+        Self {
+            days: 7,
+            limit: 200,
+        }
+    }
 }
 
 impl Config {
@@ -147,10 +170,20 @@ view_starred = ["f"]
 view_queued = ["l"]
 view_saved = ["v"]
 view_archived = ["X"]
+view_latest = ["Alt+1"]
+view_reader = ["Alt+2"]
 open_in_browser = ["o"]
 refresh = ["R"]
 toggle_maximize = ["m"]
+toggle_feed_panel = ["\\"]
 delete_feed = ["d", "Delete"]
+
+[ui.latest]
+# Number of days included in the Latest tab.
+days = 7
+
+# Maximum non-new items shown below the latest refresh batch.
+limit = 200
 
 [scraper]
 # Run browser in headless mode (no visible window)

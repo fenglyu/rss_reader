@@ -6,7 +6,7 @@ use crate::app::Result;
 use crate::domain::{Feed, FeedUpdate};
 use crate::fetcher::{FetchResult, Fetcher};
 use crate::normalizer::Normalizer;
-use crate::store::Store;
+use crate::store::{FeedRefreshResult, Store};
 
 pub const DEFAULT_WORKERS: usize = 30;
 
@@ -33,7 +33,7 @@ impl ParallelFetcher {
         store: Arc<S>,
         normalizer: &Normalizer,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
-    ) -> Vec<(i64, Result<usize>)> {
+    ) -> Vec<(i64, Result<FeedRefreshResult>)> {
         let total = feeds.len();
         let mut handles = Vec::new();
 
@@ -83,7 +83,7 @@ async fn fetch_single_feed<S: Store>(
     feed: &Feed,
     store: &Arc<S>,
     normalizer: &Normalizer,
-) -> Result<usize> {
+) -> Result<FeedRefreshResult> {
     let result = fetcher
         .fetch(
             &feed.url,
@@ -95,7 +95,11 @@ async fn fetch_single_feed<S: Store>(
     match result {
         FetchResult::NotModified => {
             tracing::debug!("Feed {} not modified", feed.url);
-            Ok(0)
+            Ok(FeedRefreshResult {
+                feed_id: feed.id,
+                new_count: 0,
+                inserted_item_ids: Vec::new(),
+            })
         }
         FetchResult::Content {
             body,
@@ -119,10 +123,14 @@ async fn fetch_single_feed<S: Store>(
             store.update_feed(feed.id, &update)?;
 
             // Add new items
-            let new_count = store.add_items(&items)?;
-            tracing::info!("Added {} new items from {}", new_count, feed.url);
+            let add_result = store.add_items_with_report(&items)?;
+            tracing::info!("Added {} new items from {}", add_result.count, feed.url);
 
-            Ok(new_count)
+            Ok(FeedRefreshResult {
+                feed_id: feed.id,
+                new_count: add_result.count,
+                inserted_item_ids: add_result.inserted_ids,
+            })
         }
     }
 }

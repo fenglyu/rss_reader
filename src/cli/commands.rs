@@ -7,7 +7,7 @@ use crate::app::{AppContext, Result, RivuletError};
 use crate::domain::{AuthProfile, Feed, FeedUpdate};
 use crate::fetcher::FetchResult;
 use crate::scraper::{ChromeScraper, Scraper, ScraperConfig};
-use crate::store::{ItemListFilter, Store};
+use crate::store::{ItemListFilter, RefreshSource, Store};
 
 /// Initialize config file with all options
 pub fn init_config(force: bool) -> Result<()> {
@@ -48,7 +48,9 @@ pub async fn add_feed(ctx: &AppContext, url: &str) -> Result<()> {
     println!("Added feed: {}", url);
 
     // Fetch and store items
+    let run_id = ctx.store.begin_refresh_run(RefreshSource::Cli, 1)?;
     let result = ctx.fetcher.fetch(url, None, None).await?;
+    let mut total_new = 0;
 
     match result {
         FetchResult::Content {
@@ -69,7 +71,10 @@ pub async fn add_feed(ctx: &AppContext, url: &str) -> Result<()> {
             ctx.store.update_feed(feed_id, &update)?;
 
             // Add items
-            let count = ctx.store.add_items(&items)?;
+            let add_result = ctx.store.add_items_with_report(&items)?;
+            total_new = add_result.count;
+            ctx.store
+                .record_refresh_run_items(run_id, feed_id, &add_result.inserted_ids)?;
 
             // Queue new items for background scraping
             ctx.queue_for_scraping(items).await;
@@ -77,12 +82,13 @@ pub async fn add_feed(ctx: &AppContext, url: &str) -> Result<()> {
             if let Some(title) = meta.title {
                 println!("Feed title: {}", title);
             }
-            println!("Fetched {} items", count);
+            println!("Fetched {} items", add_result.count);
         }
         FetchResult::NotModified => {
             println!("Feed not modified");
         }
     }
+    ctx.store.complete_refresh_run(run_id, total_new, 0)?;
 
     Ok(())
 }
@@ -107,6 +113,9 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
     }
 
     println!("Updating {} feeds...", feeds.len());
+    let run_id = ctx
+        .store
+        .begin_refresh_run(RefreshSource::Cli, feeds.len())?;
 
     let results = ctx
         .parallel_fetcher
@@ -119,12 +128,18 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
 
     for (feed_id, result) in results {
         match result {
-            Ok(count) => {
-                total_new += count;
-                if count > 0 {
+            Ok(refresh) => {
+                total_new += refresh.new_count;
+                ctx.store
+                    .record_refresh_run_items(run_id, feed_id, &refresh.inserted_item_ids)?;
+                if refresh.new_count > 0 {
                     updated_feed_ids.push(feed_id);
                     if let Ok(Some(feed)) = ctx.store.get_feed(feed_id) {
-                        println!("  {} new items from {}", count, feed.display_title());
+                        println!(
+                            "  {} new items from {}",
+                            refresh.new_count,
+                            feed.display_title()
+                        );
                     }
                 }
             }
@@ -136,6 +151,7 @@ pub async fn update_feeds(ctx: &AppContext) -> Result<()> {
             }
         }
     }
+    ctx.store.complete_refresh_run(run_id, total_new, errors)?;
 
     // Queue items from updated feeds for background scraping
     // Only queue items that actually need scraping (no content and no summary)
@@ -317,15 +333,24 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
     }
 
     println!("Fetching {} new feeds in parallel...", feeds_to_fetch.len());
+    let run_id = ctx
+        .store
+        .begin_refresh_run(RefreshSource::Import, feeds_to_fetch.len())?;
 
     // Parallel fetch all new feeds
     let results = ctx
         .parallel_fetcher
-        .fetch_all(feeds_to_fetch.clone(), ctx.store.clone(), &ctx.normalizer, None)
+        .fetch_all(
+            feeds_to_fetch.clone(),
+            ctx.store.clone(),
+            &ctx.normalizer,
+            None,
+        )
         .await;
 
     let mut added = 0;
     let mut errors = 0;
+    let mut total_new = 0;
 
     let mut imported_feed_ids = Vec::new();
 
@@ -337,8 +362,11 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
             .unwrap_or("Unknown");
 
         match result {
-            Ok(count) => {
-                println!("  + {} ({} items)", title, count);
+            Ok(refresh) => {
+                ctx.store
+                    .record_refresh_run_items(run_id, feed_id, &refresh.inserted_item_ids)?;
+                total_new += refresh.new_count;
+                println!("  + {} ({} items)", title, refresh.new_count);
                 added += 1;
                 imported_feed_ids.push(feed_id);
             }
@@ -350,6 +378,7 @@ pub async fn import_opml(ctx: &AppContext, path: &Path) -> Result<()> {
             }
         }
     }
+    ctx.store.complete_refresh_run(run_id, total_new, errors)?;
 
     // Queue items from imported feeds for background scraping
     // Only queue items that actually need scraping (no content and no summary)
