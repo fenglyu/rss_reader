@@ -59,6 +59,8 @@ pub enum Action {
     Quit,
     MoveUp,
     MoveDown,
+    MoveTop,
+    MoveBottom,
     NextPage,
     PrevPage,
     NextPane,
@@ -82,5 +84,6 @@ pub enum Action {
     ToggleMaximize,
     ToggleFeedPanel,
     DeleteFeed,
+    WindowChord,
     None,
 }

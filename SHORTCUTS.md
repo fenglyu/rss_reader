@@ -6,12 +6,17 @@
 |-----|--------|
 | `j` / `↓` | Move down (next item) |
 | `k` / `↑` | Move up (previous item) |
+| `g` | Jump to top of current list/content |
+| `G` / `%` | Jump to bottom of current list/content |
 | `n` / `PageDown` | Jump down 10 items |
 | `p` / `PageUp` | Jump up 10 items |
 | `Tab` | Switch to next pane (Feeds → Items → Preview) |
 | `Shift+Tab` | Switch to previous pane |
-| `Alt+1` | Switch to Latest tab |
-| `Alt+2` | Switch to Reader tab |
+| `Ctrl+W` then `h` | Focus the pane on the left (vim-style window chord) |
+| `Ctrl+W` then `l` | Focus the pane on the right |
+| `Ctrl+W` then `Esc` | Cancel the pending window chord |
+| `Alt+1` / `[` | Switch to Latest tab |
+| `Alt+2` / `]` | Switch to Reader tab and open the feed rail |
 
 ## Actions
 

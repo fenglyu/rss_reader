@@ -12,6 +12,8 @@ pub struct KeybindingConfig {
     pub quit: Vec<String>,
     pub move_up: Vec<String>,
     pub move_down: Vec<String>,
+    pub move_top: Vec<String>,
+    pub move_bottom: Vec<String>,
     pub next_page: Vec<String>,
     pub prev_page: Vec<String>,
     pub next_pane: Vec<String>,
@@ -35,6 +37,7 @@ pub struct KeybindingConfig {
     pub toggle_maximize: Vec<String>,
     pub toggle_feed_panel: Vec<String>,
     pub delete_feed: Vec<String>,
+    pub window_chord: Vec<String>,
 }
 
 impl Default for KeybindingConfig {
@@ -43,6 +46,8 @@ impl Default for KeybindingConfig {
             quit: vec!["q".to_string(), "Ctrl+c".to_string()],
             move_up: vec!["k".to_string(), "Up".to_string()],
             move_down: vec!["j".to_string(), "Down".to_string()],
+            move_top: vec!["g".to_string()],
+            move_bottom: vec!["G".to_string(), "%".to_string()],
             next_page: vec!["n".to_string(), "PageDown".to_string()],
             prev_page: vec!["p".to_string(), "PageUp".to_string()],
             next_pane: vec!["Tab".to_string()],
@@ -59,13 +64,14 @@ impl Default for KeybindingConfig {
             view_queued: vec!["l".to_string()],
             view_saved: vec!["v".to_string()],
             view_archived: vec!["X".to_string()],
-            view_latest: vec!["Alt+1".to_string()],
-            view_reader: vec!["Alt+2".to_string()],
+            view_latest: vec!["Alt+1".to_string(), "[".to_string()],
+            view_reader: vec!["Alt+2".to_string(), "]".to_string()],
             open_in_browser: vec!["o".to_string()],
             refresh: vec!["R".to_string()],
             toggle_maximize: vec!["m".to_string()],
             toggle_feed_panel: vec!["\\".to_string()],
             delete_feed: vec!["d".to_string(), "Delete".to_string()],
+            window_chord: vec!["Ctrl+w".to_string()],
         }
     }
 }
@@ -79,6 +85,10 @@ impl KeybindingConfig {
             Action::MoveUp
         } else if self.matches_key(key, &self.move_down) {
             Action::MoveDown
+        } else if self.matches_key(key, &self.move_top) {
+            Action::MoveTop
+        } else if self.matches_key(key, &self.move_bottom) {
+            Action::MoveBottom
         } else if self.matches_key(key, &self.next_page) {
             Action::NextPage
         } else if self.matches_key(key, &self.prev_page) {
@@ -125,6 +135,8 @@ impl KeybindingConfig {
             Action::ToggleFeedPanel
         } else if self.matches_key(key, &self.delete_feed) {
             Action::DeleteFeed
+        } else if self.matches_key(key, &self.window_chord) {
+            Action::WindowChord
         } else {
             Action::None
         }
@@ -319,6 +331,15 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         assert_eq!(config.get_action(&key), Action::MoveDown);
 
+        let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::MoveTop);
+
+        let key = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::MoveBottom);
+
+        let key = KeyEvent::new(KeyCode::Char('%'), KeyModifiers::SHIFT);
+        assert_eq!(config.get_action(&key), Action::MoveBottom);
+
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(config.get_action(&key), Action::Select);
 
@@ -358,7 +379,13 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT);
         assert_eq!(config.get_action(&key), Action::ViewLatest);
 
+        let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::ViewLatest);
+
         let key = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT);
+        assert_eq!(config.get_action(&key), Action::ViewReader);
+
+        let key = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE);
         assert_eq!(config.get_action(&key), Action::ViewReader);
 
         let key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
@@ -366,5 +393,8 @@ mod tests {
 
         let key = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT);
         assert_eq!(config.get_action(&key), Action::Refresh);
+
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(config.get_action(&key), Action::WindowChord);
     }
 }

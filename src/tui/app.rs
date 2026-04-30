@@ -22,6 +22,11 @@ pub enum FeedPanelState {
     Expanded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingChord {
+    Window,
+}
+
 impl ActivePane {
     pub fn next(self) -> Self {
         match self {
@@ -83,6 +88,7 @@ pub struct TuiApp {
     pub feeds: Vec<Feed>,
     pub items: Vec<Item>,
     pub latest_items: Vec<RecentItem>,
+    pub selected_reader_feed_id: Option<i64>,
     pub item_states: std::collections::HashMap<String, ItemState>,
     pub feed_index: usize,
     pub item_index: usize,
@@ -104,6 +110,8 @@ pub struct TuiApp {
     pub recent_limit: usize,
     // Pending delete confirmation (feed_id, feed_title)
     pub pending_delete: Option<(i64, String)>,
+    // Pending multi-key chord (e.g. Ctrl+W awaiting a direction)
+    pub pending_chord: Option<PendingChord>,
 }
 
 impl TuiApp {
@@ -122,6 +130,7 @@ impl TuiApp {
             feeds: Vec::new(),
             items: Vec::new(),
             latest_items: Vec::new(),
+            selected_reader_feed_id: None,
             item_states: std::collections::HashMap::new(),
             feed_index: 0,
             item_index: 0,
@@ -140,6 +149,7 @@ impl TuiApp {
             recent_days: 7,
             recent_limit: 200,
             pending_delete: None,
+            pending_chord: None,
         }
     }
 
@@ -259,6 +269,54 @@ impl TuiApp {
             },
             ActivePane::Preview => {
                 self.preview_scroll = self.preview_scroll.saturating_add(1);
+            }
+        }
+    }
+
+    pub fn move_top(&mut self) {
+        match self.active_pane {
+            ActivePane::Feeds => {
+                self.feed_index = 0;
+                self.feed_list_state.select(Some(0));
+            }
+            ActivePane::Items => match self.active_tab {
+                AppTab::Latest => {
+                    self.latest_index = 0;
+                    self.latest_list_state.select(Some(0));
+                    self.preview_scroll = 0;
+                }
+                AppTab::Reader => {
+                    self.item_index = 0;
+                    self.item_list_state.select(Some(0));
+                    self.preview_scroll = 0;
+                }
+            },
+            ActivePane::Preview => {
+                self.preview_scroll = 0;
+            }
+        }
+    }
+
+    pub fn move_bottom(&mut self) {
+        match self.active_pane {
+            ActivePane::Feeds => {
+                self.feed_index = self.feeds.len().saturating_sub(1);
+                self.feed_list_state.select(Some(self.feed_index));
+            }
+            ActivePane::Items => match self.active_tab {
+                AppTab::Latest => {
+                    self.latest_index = self.latest_items.len().saturating_sub(1);
+                    self.latest_list_state.select(Some(self.latest_index));
+                    self.preview_scroll = 0;
+                }
+                AppTab::Reader => {
+                    self.item_index = self.items.len().saturating_sub(1);
+                    self.item_list_state.select(Some(self.item_index));
+                    self.preview_scroll = 0;
+                }
+            },
+            ActivePane::Preview => {
+                self.preview_scroll = u16::MAX;
             }
         }
     }

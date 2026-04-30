@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::scraper::{ChromeScraper, Scraper};
 use crate::store::{RefreshSource, Store};
 
-use self::app::{ActivePane, AppTab, FeedPanelState, ItemView, TuiApp};
+use self::app::{ActivePane, AppTab, FeedPanelState, ItemView, PendingChord, TuiApp};
 use self::event::{Action, AppEvent, EventHandler};
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -54,7 +54,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
 
     // Load initial data
     load_feeds(&mut tui_app, &ctx)?;
-    load_current_items(&mut tui_app, &ctx)?;
+    load_reader_items(&mut tui_app, &ctx)?;
     load_latest_items(&mut tui_app, &ctx)?;
 
     loop {
@@ -73,7 +73,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             ctx.store.delete_feed(feed_id)?;
                             load_feeds(&mut tui_app, &ctx)?;
-                            load_current_items(&mut tui_app, &ctx)?;
+                            load_reader_items(&mut tui_app, &ctx)?;
                             load_latest_items(&mut tui_app, &ctx)?;
                             tui_app.set_status(format!("Deleted feed: {}", feed_title));
                         }
@@ -84,7 +84,16 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                     continue;
                 }
 
+                // Handle pending multi-key chord (e.g. Ctrl+W <h|l>)
+                if let Some(chord) = tui_app.pending_chord.take() {
+                    match chord {
+                        PendingChord::Window => handle_window_chord_key(&mut tui_app, &key),
+                    }
+                    continue;
+                }
+
                 let action = config.keybindings.get_action(&key);
+                let feed_index_before = tui_app.feed_index;
                 match action {
                     Action::Quit => {
                         tui_app.should_quit = true;
@@ -94,6 +103,12 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                     }
                     Action::MoveDown => {
                         tui_app.move_down();
+                    }
+                    Action::MoveTop => {
+                        tui_app.move_top();
+                    }
+                    Action::MoveBottom => {
+                        tui_app.move_bottom();
                     }
                     Action::NextPage => {
                         tui_app.next_page();
@@ -116,6 +131,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         {
                             let feed_id = tui_app.selected_feed().map(|f| f.id);
                             if let Some(feed_id) = feed_id {
+                                tui_app.selected_reader_feed_id = Some(feed_id);
                                 load_items_for_feed(&mut tui_app, &ctx, feed_id)?;
                                 tui_app.active_pane = ActivePane::Items;
                             }
@@ -184,8 +200,9 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                     }
                     Action::ViewReader => {
                         tui_app.active_tab = AppTab::Reader;
-                        tui_app.active_pane = ActivePane::Items;
-                        load_current_items(&mut tui_app, &ctx)?;
+                        tui_app.feed_panel = FeedPanelState::Expanded;
+                        tui_app.active_pane = ActivePane::Feeds;
+                        load_reader_items(&mut tui_app, &ctx)?;
                     }
                     Action::OpenInBrowser => {
                         if let Some(item) = tui_app.selected_item_for_active_tab() {
@@ -262,7 +279,12 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                                     FeedPanelState::Expanded
                                 }
                                 FeedPanelState::Expanded => {
-                                    tui_app.active_pane = ActivePane::Items;
+                                    tui_app.active_pane =
+                                        if tui_app.selected_reader_feed_id.is_some() {
+                                            ActivePane::Items
+                                        } else {
+                                            ActivePane::Preview
+                                        };
                                     FeedPanelState::Collapsed
                                 }
                             };
@@ -283,7 +305,29 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                             }
                         }
                     }
+                    Action::WindowChord => {
+                        tui_app.pending_chord = Some(PendingChord::Window);
+                        tui_app.set_status(
+                            "-- WINDOW -- (h: left, l: right, Esc: cancel)".to_string(),
+                        );
+                    }
                     Action::None => {}
+                }
+
+                // If feed-pane navigation moved the highlight to a new feed,
+                // auto-load that feed's items so the Items pane (and its filter
+                // count in the title) reflects the highlighted feed without
+                // requiring an explicit Enter.
+                if tui_app.active_tab == AppTab::Reader
+                    && tui_app.active_pane == ActivePane::Feeds
+                    && tui_app.feed_index != feed_index_before
+                {
+                    if let Some(feed_id) = tui_app.selected_feed().map(|f| f.id) {
+                        if tui_app.selected_reader_feed_id != Some(feed_id) {
+                            tui_app.selected_reader_feed_id = Some(feed_id);
+                            load_items_for_feed(&mut tui_app, &ctx, feed_id)?;
+                        }
+                    }
                 }
             }
             AppEvent::Tick => {
@@ -331,7 +375,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                 }
 
                 load_feeds(&mut tui_app, &ctx)?;
-                load_current_items(&mut tui_app, &ctx)?;
+                load_reader_items(&mut tui_app, &ctx)?;
                 load_latest_items(&mut tui_app, &ctx)?;
 
                 tui_app.is_refreshing = false;
@@ -349,6 +393,14 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
 
 fn load_feeds(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     tui_app.feeds = ctx.store.get_all_feeds()?;
+    if let Some(feed_id) = tui_app.selected_reader_feed_id {
+        if !tui_app.feeds.iter().any(|feed| feed.id == feed_id) {
+            tui_app.selected_reader_feed_id = None;
+            tui_app.items.clear();
+            tui_app.item_index = 0;
+            tui_app.item_list_state.select(None);
+        }
+    }
     if tui_app.feed_index >= tui_app.feeds.len() && !tui_app.feeds.is_empty() {
         tui_app.feed_index = tui_app.feeds.len() - 1;
     }
@@ -356,12 +408,27 @@ fn load_feeds(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     Ok(())
 }
 
-fn load_current_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
-    tui_app.items = ctx.store.get_items_by_filter(tui_app.item_view.filter())?;
+fn load_reader_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    if let Some(feed_id) = tui_app.selected_reader_feed_id {
+        load_items_for_feed(tui_app, ctx, feed_id)?;
+    } else {
+        tui_app.items.clear();
+        tui_app.item_index = 0;
+        tui_app.item_list_state.select(None);
+        reload_item_states(tui_app, ctx)?;
+    }
+    Ok(())
+}
+
+fn finish_reader_items_load(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     if tui_app.item_index >= tui_app.items.len() && !tui_app.items.is_empty() {
         tui_app.item_index = tui_app.items.len() - 1;
     }
-    tui_app.item_list_state.select(Some(tui_app.item_index));
+    if tui_app.items.is_empty() {
+        tui_app.item_list_state.select(None);
+    } else {
+        tui_app.item_list_state.select(Some(tui_app.item_index));
+    }
     reload_item_states(tui_app, ctx)?;
     Ok(())
 }
@@ -389,20 +456,52 @@ fn set_item_view(tui_app: &mut TuiApp, ctx: &AppContext, view: ItemView) -> Resu
     tui_app.preview_scroll = 0;
     match tui_app.active_tab {
         AppTab::Latest => load_latest_items(tui_app, ctx)?,
-        AppTab::Reader => load_current_items(tui_app, ctx)?,
+        AppTab::Reader => load_reader_items(tui_app, ctx)?,
     }
-    tui_app.active_pane = ActivePane::Items;
+    tui_app.active_pane =
+        if tui_app.active_tab == AppTab::Reader && tui_app.selected_reader_feed_id.is_none() {
+            ActivePane::Feeds
+        } else {
+            ActivePane::Items
+        };
     tui_app.set_status(format!("Showing {} items", view.label()));
     Ok(())
 }
 
 fn load_items_for_feed(tui_app: &mut TuiApp, ctx: &AppContext, feed_id: i64) -> Result<()> {
-    tui_app.item_view = ItemView::All;
-    tui_app.items = ctx.store.get_items_by_feed(feed_id)?;
+    let items = ctx.store.get_items_by_feed(feed_id)?;
+    let filter = tui_app.item_view.filter();
+    let mut filtered = Vec::new();
+    for item in items {
+        if item_matches_filter(ctx, &item, filter)? {
+            filtered.push(item);
+        }
+    }
+    tui_app.items = filtered;
     tui_app.item_index = 0;
-    tui_app.item_list_state.select(Some(0));
-    reload_item_states(tui_app, ctx)?;
-    Ok(())
+    finish_reader_items_load(tui_app, ctx)
+}
+
+fn item_matches_filter(
+    ctx: &AppContext,
+    item: &crate::domain::Item,
+    filter: crate::store::ItemListFilter,
+) -> Result<bool> {
+    let state = ctx.store.get_item_state(&item.id)?;
+    let is_read = state.as_ref().map(|s| s.is_read).unwrap_or(false);
+    let is_starred = state.as_ref().map(|s| s.is_starred).unwrap_or(false);
+    let is_queued = state.as_ref().map(|s| s.is_queued).unwrap_or(false);
+    let is_saved = state.as_ref().map(|s| s.is_saved).unwrap_or(false);
+    let is_archived = state.as_ref().map(|s| s.is_archived).unwrap_or(false);
+
+    Ok(match filter {
+        crate::store::ItemListFilter::All => !is_archived,
+        crate::store::ItemListFilter::Unread => !is_archived && !is_read,
+        crate::store::ItemListFilter::Starred => !is_archived && is_starred,
+        crate::store::ItemListFilter::Queued => !is_archived && is_queued,
+        crate::store::ItemListFilter::Saved => !is_archived && is_saved,
+        crate::store::ItemListFilter::Archived => is_archived,
+    })
 }
 
 fn reload_item_states(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
@@ -454,6 +553,94 @@ fn prev_pane_for_tab(tui_app: &TuiApp) -> ActivePane {
                 _ => ActivePane::Preview,
             },
         },
+    }
+}
+
+fn handle_window_chord_key(tui_app: &mut TuiApp, key: &crossterm::event::KeyEvent) {
+    if tui_app.maximized {
+        tui_app.set_status("Window chord unavailable in maximize mode".to_string());
+        return;
+    }
+    match key.code {
+        KeyCode::Char('h') | KeyCode::Left => {
+            let target = focus_left_for_tab(tui_app);
+            if target == tui_app.active_pane {
+                tui_app.set_status("Already at leftmost pane".to_string());
+            } else {
+                tui_app.active_pane = target;
+                tui_app.clear_status();
+            }
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            let target = focus_right_for_tab(tui_app);
+            if target == tui_app.active_pane {
+                tui_app.set_status("Already at rightmost pane".to_string());
+            } else {
+                tui_app.active_pane = target;
+                tui_app.clear_status();
+            }
+        }
+        KeyCode::Esc => {
+            tui_app.set_status("Window chord cancelled".to_string());
+        }
+        _ => {
+            tui_app.clear_status();
+        }
+    }
+}
+
+fn focus_left_for_tab(tui_app: &TuiApp) -> ActivePane {
+    match tui_app.active_tab {
+        AppTab::Latest => match tui_app.active_pane {
+            ActivePane::Preview => ActivePane::Items,
+            other => other,
+        },
+        AppTab::Reader => {
+            let feeds_focusable = tui_app.feed_panel == FeedPanelState::Expanded;
+            let items_focusable = tui_app.selected_reader_feed_id.is_some();
+            match tui_app.active_pane {
+                ActivePane::Preview => {
+                    if items_focusable {
+                        ActivePane::Items
+                    } else if feeds_focusable {
+                        ActivePane::Feeds
+                    } else {
+                        ActivePane::Preview
+                    }
+                }
+                ActivePane::Items => {
+                    if feeds_focusable {
+                        ActivePane::Feeds
+                    } else {
+                        ActivePane::Items
+                    }
+                }
+                ActivePane::Feeds => ActivePane::Feeds,
+            }
+        }
+    }
+}
+
+fn focus_right_for_tab(tui_app: &TuiApp) -> ActivePane {
+    match tui_app.active_tab {
+        AppTab::Latest => match tui_app.active_pane {
+            ActivePane::Items => ActivePane::Preview,
+            other => other,
+        },
+        AppTab::Reader => {
+            let items_focusable = tui_app.selected_reader_feed_id.is_some();
+            match tui_app.active_pane {
+                ActivePane::Feeds => {
+                    if items_focusable {
+                        ActivePane::Items
+                    } else {
+                        ActivePane::Preview
+                    }
+                }
+                ActivePane::Items => ActivePane::Preview,
+                ActivePane::Preview => ActivePane::Preview,
+            }
+        }
     }
 }
 

@@ -88,12 +88,31 @@ fn render_latest_tab(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
 
 fn render_reader_tab(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &ColorConfig) {
     if area.width < 80 {
-        if app.selected_item().is_some() && app.active_pane == ActivePane::Preview {
+        if app.selected_reader_feed_id.is_none() && app.feed_panel == FeedPanelState::Expanded {
+            render_feeds_pane(frame, app, area, colors);
+        } else if app.selected_reader_feed_id.is_none() {
+            render_content_pane(frame, None, app, area, colors, " Preview ");
+        } else if app.selected_item().is_some() && app.active_pane == ActivePane::Preview {
             let selected = app.selected_item().cloned();
             render_content_pane(frame, selected.as_ref(), app, area, colors, " Preview ");
         } else {
             render_items_pane(frame, app, area, colors);
         }
+        return;
+    }
+
+    if app.selected_reader_feed_id.is_none() {
+        let feed_width = match app.feed_panel {
+            FeedPanelState::Collapsed => 3,
+            FeedPanelState::Expanded => 30,
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(feed_width), Constraint::Percentage(100)])
+            .split(area);
+
+        render_feed_rail(frame, app, chunks[0], colors);
+        render_content_pane(frame, None, app, chunks[1], colors, " Preview ");
         return;
     }
 
@@ -199,13 +218,23 @@ fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
         app.items.len().max(1)
     );
 
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style(is_active, colors));
+
+    if app.items.is_empty() {
+        let message = if app.selected_reader_feed_id.is_none() {
+            "Select a source from the feed list."
+        } else {
+            "No items for this source and filter."
+        };
+        frame.render_widget(Paragraph::new(message).block(block), area);
+        return;
+    }
+
     let list = List::new(items)
-        .block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(border_style(is_active, colors)),
-        )
+        .block(block)
         .highlight_style(selection_style(is_active, colors))
         .highlight_symbol("> ");
 
@@ -414,9 +443,9 @@ fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect, colors: &Color
         } else if let Some(ref msg) = app.status_message {
             msg.clone()
         } else if app.maximized {
-            "j/k:Scroll  n/p:Page  m:Exit maximize  Alt+1/2:Tabs  q:Quit".to_string()
+            "j/k:Scroll  g/G/%:Top/Bottom  n/p:Page  m:Exit maximize  [/]:Tabs  q:Quit".to_string()
         } else {
-            "Alt+1:Latest  Alt+2:Reader  \\:Feeds  j/k:Nav  a/u/f/l/v/X:Views  r/s/L/S/x/o:Actions  R:Refresh  q:Quit"
+            "[/]:Tabs  \\:Feeds  j/k/g/G/%:Nav  a/u/f/l/v/X:Views  r/s/L/S/x/o:Actions  R:Refresh  q:Quit"
                 .to_string()
         };
 
