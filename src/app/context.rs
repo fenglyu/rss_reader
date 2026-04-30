@@ -55,6 +55,20 @@ impl AppContext {
         })
     }
 
+    pub fn in_memory_with_fetcher(fetcher: Arc<dyn Fetcher + Send + Sync>) -> Result<Self> {
+        let store = Arc::new(SqliteStore::in_memory()?);
+        let parallel_fetcher = ParallelFetcher::new(fetcher.clone());
+        let normalizer = Normalizer::new();
+
+        Ok(Self {
+            store,
+            fetcher,
+            parallel_fetcher,
+            normalizer,
+            scraper_handle: None,
+        })
+    }
+
     pub fn in_memory() -> Result<Self> {
         Self::in_memory_with_workers(DEFAULT_WORKERS)
     }

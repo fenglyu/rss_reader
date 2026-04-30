@@ -33,4 +33,10 @@ pub enum RivuletError {
     Other(String),
 }
 
+impl From<std::convert::Infallible> for RivuletError {
+    fn from(x: std::convert::Infallible) -> Self {
+        match x {}
+    }
+}
+
 pub type Result<T> = std::result::Result<T, RivuletError>;

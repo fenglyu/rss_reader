@@ -25,7 +25,8 @@ type Tui = Terminal<CrosstermBackend<Stdout>>;
 
 pub async fn run(ctx: Arc<AppContext>, config: Arc<Config>) -> Result<()> {
     let mut terminal = setup_terminal()?;
-    let result = run_app(&mut terminal, ctx, config).await;
+    let event_handler = EventHandler::new(Duration::from_millis(100));
+    let result = run_app(&mut terminal, event_handler, ctx, config).await;
     restore_terminal(&mut terminal)?;
     result
 }
@@ -46,11 +47,20 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
     Ok(())
 }
 
-async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) -> Result<()> {
+/// Public for integration-test access only; not part of the stable API.
+#[doc(hidden)]
+pub async fn run_app<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    mut event_handler: EventHandler,
+    ctx: Arc<AppContext>,
+    config: Arc<Config>,
+) -> Result<()>
+where
+    crate::app::error::RivuletError: From<B::Error>,
+{
     let mut tui_app = TuiApp::new();
     tui_app.recent_days = config.ui.latest.days;
     tui_app.recent_limit = config.ui.latest.limit;
-    let mut event_handler = EventHandler::new(Duration::from_millis(100));
 
     // Load initial data
     load_feeds(&mut tui_app, &ctx)?;
@@ -1017,4 +1027,160 @@ mod tests {
         assert!(!moved);
         assert_eq!(tui_app.active_pane, ActivePane::Feeds);
     }
+
+    #[test]
+    fn navigation_clamping_at_boundaries() {
+        let ctx = AppContext::in_memory().unwrap();
+        // PAGE_SIZE is 10, so let's add 25 items to test pagination
+        let feed_id = add_feed_with_items(&ctx, "alpha", 25);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        load_items_for_feed(&mut tui_app, &ctx, feed_id).unwrap();
+        tui_app.active_pane = ActivePane::Items;
+
+        // g (MoveTop)
+        tui_app.move_bottom();
+        assert_eq!(tui_app.loaded_item_index(), 24);
+        tui_app.move_top();
+        assert_eq!(tui_app.loaded_item_index(), 0);
+
+        // G (MoveBottom)
+        tui_app.move_bottom();
+        assert_eq!(tui_app.loaded_item_index(), 24);
+
+        // n (NextPage) clamping
+        tui_app.move_top();
+        tui_app.next_page(); // 0 -> 10
+        assert_eq!(tui_app.loaded_item_index(), 10);
+        tui_app.next_page(); // 10 -> 20
+        assert_eq!(tui_app.loaded_item_index(), 20);
+        tui_app.next_page(); // 20 -> 24 (clamped)
+        assert_eq!(tui_app.loaded_item_index(), 24);
+        tui_app.next_page(); // 24 -> 24 (stay)
+        assert_eq!(tui_app.loaded_item_index(), 24);
+
+        // p (PrevPage) clamping
+        tui_app.prev_page(); // 24 -> 14
+        assert_eq!(tui_app.loaded_item_index(), 14);
+        tui_app.prev_page(); // 14 -> 4
+        assert_eq!(tui_app.loaded_item_index(), 4);
+        tui_app.prev_page(); // 4 -> 0 (clamped)
+        assert_eq!(tui_app.loaded_item_index(), 0);
+        tui_app.prev_page(); // 0 -> 0 (stay)
+        assert_eq!(tui_app.loaded_item_index(), 0);
+    }
+
+    #[test]
+    fn pane_cycling_traversal() {
+        let ctx = AppContext::in_memory().unwrap();
+        add_feed_with_items(&ctx, "alpha", 1);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        load_items_for_highlighted_feed(&mut tui_app, &ctx).unwrap();
+
+        // Forward cycling: Feeds -> Items -> Preview -> Feeds
+        assert_eq!(tui_app.active_pane, ActivePane::Feeds);
+        focus_next_pane(&mut tui_app, &ctx).unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+        focus_next_pane(&mut tui_app, &ctx).unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+        focus_next_pane(&mut tui_app, &ctx).unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Feeds);
+
+        // Backward cycling: Feeds -> Preview -> Items -> Feeds
+        focus_prev_pane(&mut tui_app, &ctx).unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+        focus_prev_pane(&mut tui_app, &ctx).unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+        focus_prev_pane(&mut tui_app, &ctx).unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Feeds);
+    }
+
+    #[test]
+    fn chord_state_lifecycle() {
+        // Mirrors the run_app loop: Action::WindowChord sets pending_chord;
+        // the next key is dispatched by taking the chord and calling
+        // handle_window_chord_key. Verify cancel + directional paths.
+        let ctx = AppContext::in_memory().unwrap();
+        add_feed_with_items(&ctx, "alpha", 1);
+
+        // Path 1: Esc cancels.
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        tui_app.pending_chord = Some(PendingChord::Window);
+        let chord = tui_app.pending_chord.take();
+        assert_eq!(chord, Some(PendingChord::Window));
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert!(tui_app.pending_chord.is_none());
+        assert_eq!(
+            tui_app.status_message.as_deref(),
+            Some("Window chord cancelled"),
+        );
+
+        // Path 2: 'l' advances focus right (Feeds → Items).
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        tui_app.pending_chord = Some(PendingChord::Window);
+        let _ = tui_app.pending_chord.take();
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert!(tui_app.pending_chord.is_none());
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+    }
+
+    #[test]
+    fn filter_views_item_counts() {
+        let ctx = AppContext::in_memory().unwrap();
+        let feed_id = add_feed_with_items(&ctx, "alpha", 10);
+        let items = ctx.store.get_items_by_feed(feed_id).unwrap();
+
+        // item 0: unread (default)
+        // item 1: read
+        ctx.store.set_read(&items[1].id, true).unwrap();
+        // item 2: starred
+        ctx.store.set_starred(&items[2].id, true).unwrap();
+        // item 3: queued
+        ctx.store.set_queued(&items[3].id, true).unwrap();
+        // item 4: saved
+        ctx.store.set_saved(&items[4].id, true).unwrap();
+        // item 5: archived
+        ctx.store.set_archived(&items[5].id, true).unwrap();
+
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        load_items_for_feed(&mut tui_app, &ctx, feed_id).unwrap();
+
+        // View All (default, excludes archived)
+        set_item_view(&mut tui_app, &ctx, ItemView::All).unwrap();
+        assert_eq!(tui_app.loaded_items().len(), 9); // 10 - 1 archived
+
+        // View Unread
+        set_item_view(&mut tui_app, &ctx, ItemView::Unread).unwrap();
+        assert_eq!(tui_app.loaded_items().len(), 8); // 10 - 1 archived - 1 read
+
+        // View Starred
+        set_item_view(&mut tui_app, &ctx, ItemView::Starred).unwrap();
+        assert_eq!(tui_app.loaded_items().len(), 1);
+
+        // View Queued
+        set_item_view(&mut tui_app, &ctx, ItemView::Queued).unwrap();
+        assert_eq!(tui_app.loaded_items().len(), 1);
+
+        // View Saved
+        set_item_view(&mut tui_app, &ctx, ItemView::Saved).unwrap();
+        assert_eq!(tui_app.loaded_items().len(), 1);
+
+        // View Archived
+        set_item_view(&mut tui_app, &ctx, ItemView::Archived).unwrap();
+        assert_eq!(tui_app.loaded_items().len(), 1);
+    }
+
+    // Toggle-action coverage lives in tests/tui_e2e.rs::test_toggle_actions_persist_through_dispatch
+    // — that test drives the actual Action::ToggleX dispatch via key presses,
+    // which is what users hit and what the unit-level test was claiming to
+    // cover but didn't.
 }
