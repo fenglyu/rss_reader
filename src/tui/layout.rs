@@ -88,9 +88,9 @@ fn render_latest_tab(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
 
 fn render_reader_tab(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &ColorConfig) {
     if area.width < 80 {
-        if app.selected_reader_feed_id.is_none() && app.feed_panel == FeedPanelState::Expanded {
+        if app.loaded_feed.is_none() && app.feed_panel == FeedPanelState::Expanded {
             render_feeds_pane(frame, app, area, colors);
-        } else if app.selected_reader_feed_id.is_none() {
+        } else if app.loaded_feed.is_none() {
             render_content_pane(frame, None, app, area, colors, " Preview ");
         } else if app.selected_item().is_some() && app.active_pane == ActivePane::Preview {
             let selected = app.selected_item().cloned();
@@ -101,7 +101,7 @@ fn render_reader_tab(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
         return;
     }
 
-    if app.selected_reader_feed_id.is_none() {
+    if app.loaded_feed.is_none() {
         let feed_width = match app.feed_panel {
             FeedPanelState::Collapsed => 3,
             FeedPanelState::Expanded => 30,
@@ -167,7 +167,7 @@ fn render_feeds_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
         .iter()
         .map(|feed| {
             let unread = app
-                .items
+                .loaded_items()
                 .iter()
                 .filter(|item| item.feed_id == feed.id && !app.is_item_read(&item.id))
                 .count();
@@ -204,41 +204,51 @@ fn render_feeds_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &C
 
 fn render_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &ColorConfig) {
     let is_active = app.active_tab == AppTab::Reader && app.active_pane == ActivePane::Items;
-    let items: Vec<ListItem> = app
-        .items
+
+    // Collect everything we need from `app` under an immutable borrow first
+    // so that the `&mut` borrow we take below for `item_list_state` is the
+    // only outstanding mutable borrow when we hit `render_stateful_widget`.
+    let items: Vec<ListItem<'static>> = app
+        .loaded_items()
         .iter()
         .map(|item| render_item_row(app, item, false, colors))
         .collect();
-
     let title = format!(
         " Items: {} ({}) [{}/{}] ",
         app.item_view.label(),
-        app.items.len(),
-        app.item_index + 1,
-        app.items.len().max(1)
+        app.loaded_items().len(),
+        app.loaded_item_index() + 1,
+        app.loaded_items().len().max(1)
     );
-
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(border_style(is_active, colors));
+    let highlight = selection_style(is_active, colors);
 
-    if app.items.is_empty() {
-        let message = if app.selected_reader_feed_id.is_none() {
-            "Select a source from the feed list."
-        } else {
-            "No items for this source and filter."
-        };
-        frame.render_widget(Paragraph::new(message).block(block), area);
+    let Some(loaded) = app.loaded_feed.as_mut() else {
+        // No feed loaded → render the empty-state message with the same block.
+        frame.render_widget(
+            Paragraph::new("Select a source from the feed list.").block(block),
+            area,
+        );
+        return;
+    };
+
+    if loaded.items.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No items for this source and filter.").block(block),
+            area,
+        );
         return;
     }
 
     let list = List::new(items)
         .block(block)
-        .highlight_style(selection_style(is_active, colors))
+        .highlight_style(highlight)
         .highlight_symbol("> ");
 
-    frame.render_stateful_widget(list, area, &mut app.item_list_state);
+    frame.render_stateful_widget(list, area, &mut loaded.item_list_state);
 }
 
 fn render_latest_items_pane(frame: &mut Frame, app: &mut TuiApp, area: Rect, colors: &ColorConfig) {

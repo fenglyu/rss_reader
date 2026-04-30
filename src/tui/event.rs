@@ -65,6 +65,8 @@ pub enum Action {
     PrevPage,
     NextPane,
     PrevPane,
+    FocusLeft,
+    FocusRight,
     Select,
     ToggleRead,
     ToggleStar,

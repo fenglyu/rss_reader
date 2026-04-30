@@ -18,6 +18,8 @@ pub struct KeybindingConfig {
     pub prev_page: Vec<String>,
     pub next_pane: Vec<String>,
     pub prev_pane: Vec<String>,
+    pub pane_left: Vec<String>,
+    pub pane_right: Vec<String>,
     pub select: Vec<String>,
     pub toggle_read: Vec<String>,
     pub toggle_star: Vec<String>,
@@ -52,6 +54,8 @@ impl Default for KeybindingConfig {
             prev_page: vec!["p".to_string(), "PageUp".to_string()],
             next_pane: vec!["Tab".to_string()],
             prev_pane: vec!["BackTab".to_string(), "Shift+Tab".to_string()],
+            pane_left: vec!["Left".to_string(), "h".to_string()],
+            pane_right: vec!["Right".to_string(), "l".to_string()],
             select: vec!["Enter".to_string()],
             toggle_read: vec!["r".to_string()],
             toggle_star: vec!["s".to_string()],
@@ -61,7 +65,7 @@ impl Default for KeybindingConfig {
             view_all: vec!["a".to_string()],
             view_unread: vec!["u".to_string()],
             view_starred: vec!["f".to_string()],
-            view_queued: vec!["l".to_string()],
+            view_queued: vec!["Q".to_string()],
             view_saved: vec!["v".to_string()],
             view_archived: vec!["X".to_string()],
             view_latest: vec!["Alt+1".to_string(), "[".to_string()],
@@ -97,6 +101,10 @@ impl KeybindingConfig {
             Action::NextPane
         } else if self.matches_key(key, &self.prev_pane) {
             Action::PrevPane
+        } else if self.matches_key(key, &self.pane_left) {
+            Action::FocusLeft
+        } else if self.matches_key(key, &self.pane_right) {
+            Action::FocusRight
         } else if self.matches_key(key, &self.select) {
             Action::Select
         } else if self.matches_key(key, &self.toggle_read) {
@@ -367,7 +375,16 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
         assert_eq!(config.get_action(&key), Action::ViewStarred);
 
+        // `l` now focuses the pane to the right (alongside Right arrow);
+        // queue view moved to `Q` so the vim-style hjkl pane navigation can
+        // be symmetric.
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::FocusRight);
+
+        let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::FocusLeft);
+
+        let key = KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::SHIFT);
         assert_eq!(config.get_action(&key), Action::ViewQueued);
 
         let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
@@ -396,5 +413,11 @@ mod tests {
 
         let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
         assert_eq!(config.get_action(&key), Action::WindowChord);
+
+        let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::FocusLeft);
+
+        let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(config.get_action(&key), Action::FocusRight);
     }
 }

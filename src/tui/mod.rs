@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::scraper::{ChromeScraper, Scraper};
 use crate::store::{RefreshSource, Store};
 
-use self::app::{ActivePane, AppTab, FeedPanelState, ItemView, PendingChord, TuiApp};
+use self::app::{ActivePane, AppTab, FeedPanelState, ItemView, LoadedFeed, PendingChord, TuiApp};
 use self::event::{Action, AppEvent, EventHandler};
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -87,7 +87,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                 // Handle pending multi-key chord (e.g. Ctrl+W <h|l>)
                 if let Some(chord) = tui_app.pending_chord.take() {
                     match chord {
-                        PendingChord::Window => handle_window_chord_key(&mut tui_app, &key),
+                        PendingChord::Window => handle_window_chord_key(&mut tui_app, &ctx, &key)?,
                     }
                     continue;
                 }
@@ -120,23 +120,30 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         tui_app.toggle_maximize();
                     }
                     Action::NextPane => {
-                        tui_app.active_pane = next_pane_for_tab(&tui_app);
+                        focus_next_pane(&mut tui_app, &ctx)?;
                     }
                     Action::PrevPane => {
-                        tui_app.active_pane = prev_pane_for_tab(&tui_app);
+                        focus_prev_pane(&mut tui_app, &ctx)?;
                     }
-                    Action::Select => {
-                        if tui_app.active_tab == AppTab::Reader
-                            && tui_app.active_pane == ActivePane::Feeds
-                        {
-                            let feed_id = tui_app.selected_feed().map(|f| f.id);
-                            if let Some(feed_id) = feed_id {
-                                tui_app.selected_reader_feed_id = Some(feed_id);
-                                load_items_for_feed(&mut tui_app, &ctx, feed_id)?;
+                    Action::FocusLeft => {
+                        focus_pane_directional(&mut tui_app, &ctx, focus_left_for_tab)?;
+                    }
+                    Action::FocusRight => {
+                        focus_pane_directional(&mut tui_app, &ctx, focus_right_for_tab)?;
+                    }
+                    Action::Select => match (tui_app.active_tab, tui_app.active_pane) {
+                        (AppTab::Reader, ActivePane::Feeds) => {
+                            if load_items_for_highlighted_feed(&mut tui_app, &ctx)? {
                                 tui_app.active_pane = ActivePane::Items;
                             }
                         }
-                    }
+                        (_, ActivePane::Items) => {
+                            if tui_app.selected_item_for_active_tab().is_some() {
+                                tui_app.active_pane = ActivePane::Preview;
+                            }
+                        }
+                        _ => {}
+                    },
                     Action::ToggleRead => {
                         if let Some(item) = tui_app.selected_item_for_active_tab() {
                             let item_id = item.id.clone();
@@ -202,7 +209,11 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                         tui_app.active_tab = AppTab::Reader;
                         tui_app.feed_panel = FeedPanelState::Expanded;
                         tui_app.active_pane = ActivePane::Feeds;
-                        load_reader_items(&mut tui_app, &ctx)?;
+                        // Eagerly load the highlighted feed's items so the
+                        // Items pane isn't empty on first entry. Symmetric
+                        // with `Action::ViewLatest`, which calls
+                        // `load_latest_items` immediately.
+                        load_items_for_highlighted_feed(&mut tui_app, &ctx)?;
                     }
                     Action::OpenInBrowser => {
                         if let Some(item) = tui_app.selected_item_for_active_tab() {
@@ -279,12 +290,12 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                                     FeedPanelState::Expanded
                                 }
                                 FeedPanelState::Expanded => {
-                                    tui_app.active_pane =
-                                        if tui_app.selected_reader_feed_id.is_some() {
-                                            ActivePane::Items
-                                        } else {
-                                            ActivePane::Preview
-                                        };
+                                    load_items_for_highlighted_feed(&mut tui_app, &ctx)?;
+                                    tui_app.active_pane = if tui_app.loaded_feed.is_some() {
+                                        ActivePane::Items
+                                    } else {
+                                        ActivePane::Preview
+                                    };
                                     FeedPanelState::Collapsed
                                 }
                             };
@@ -308,7 +319,8 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                     Action::WindowChord => {
                         tui_app.pending_chord = Some(PendingChord::Window);
                         tui_app.set_status(
-                            "-- WINDOW -- (h: left, l: right, Esc: cancel)".to_string(),
+                            "-- WINDOW -- (h/l: left/right, w/Tab: next, W/Shift+Tab: prev, Esc: cancel)"
+                                .to_string(),
                         );
                     }
                     Action::None => {}
@@ -322,12 +334,7 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
                     && tui_app.active_pane == ActivePane::Feeds
                     && tui_app.feed_index != feed_index_before
                 {
-                    if let Some(feed_id) = tui_app.selected_feed().map(|f| f.id) {
-                        if tui_app.selected_reader_feed_id != Some(feed_id) {
-                            tui_app.selected_reader_feed_id = Some(feed_id);
-                            load_items_for_feed(&mut tui_app, &ctx, feed_id)?;
-                        }
-                    }
+                    load_items_for_highlighted_feed(&mut tui_app, &ctx)?;
                 }
             }
             AppEvent::Tick => {
@@ -393,43 +400,40 @@ async fn run_app(terminal: &mut Tui, ctx: Arc<AppContext>, config: Arc<Config>) 
 
 fn load_feeds(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
     tui_app.feeds = ctx.store.get_all_feeds()?;
-    if let Some(feed_id) = tui_app.selected_reader_feed_id {
-        if !tui_app.feeds.iter().any(|feed| feed.id == feed_id) {
-            tui_app.selected_reader_feed_id = None;
-            tui_app.items.clear();
-            tui_app.item_index = 0;
-            tui_app.item_list_state.select(None);
+
+    if tui_app.feeds.is_empty() {
+        tui_app.feed_index = 0;
+        tui_app.feed_list_state.select(None);
+        clear_reader_feed_selection(tui_app, ctx)?;
+        return Ok(());
+    }
+
+    if let Some(feed_id) = tui_app.loaded_feed_id() {
+        if let Some(index) = tui_app.feeds.iter().position(|feed| feed.id == feed_id) {
+            tui_app.feed_index = index;
+        } else {
+            clear_reader_feed_selection(tui_app, ctx)?;
         }
     }
-    if tui_app.feed_index >= tui_app.feeds.len() && !tui_app.feeds.is_empty() {
+
+    if tui_app.feed_index >= tui_app.feeds.len() {
         tui_app.feed_index = tui_app.feeds.len() - 1;
     }
     tui_app.feed_list_state.select(Some(tui_app.feed_index));
     Ok(())
 }
 
-fn load_reader_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
-    if let Some(feed_id) = tui_app.selected_reader_feed_id {
-        load_items_for_feed(tui_app, ctx, feed_id)?;
-    } else {
-        tui_app.items.clear();
-        tui_app.item_index = 0;
-        tui_app.item_list_state.select(None);
-        reload_item_states(tui_app, ctx)?;
-    }
-    Ok(())
+fn clear_reader_feed_selection(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    tui_app.loaded_feed = None;
+    reload_item_states(tui_app, ctx)
 }
 
-fn finish_reader_items_load(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
-    if tui_app.item_index >= tui_app.items.len() && !tui_app.items.is_empty() {
-        tui_app.item_index = tui_app.items.len() - 1;
-    }
-    if tui_app.items.is_empty() {
-        tui_app.item_list_state.select(None);
+fn load_reader_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    if let Some(feed_id) = tui_app.loaded_feed_id() {
+        load_items_for_feed(tui_app, ctx, feed_id)?;
     } else {
-        tui_app.item_list_state.select(Some(tui_app.item_index));
+        clear_reader_feed_selection(tui_app, ctx)?;
     }
-    reload_item_states(tui_app, ctx)?;
     Ok(())
 }
 
@@ -451,24 +455,43 @@ fn load_latest_items(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
 
 fn set_item_view(tui_app: &mut TuiApp, ctx: &AppContext, view: ItemView) -> Result<()> {
     tui_app.item_view = view;
-    tui_app.item_index = 0;
     tui_app.latest_index = 0;
     tui_app.preview_scroll = 0;
     match tui_app.active_tab {
         AppTab::Latest => load_latest_items(tui_app, ctx)?,
         AppTab::Reader => load_reader_items(tui_app, ctx)?,
     }
-    tui_app.active_pane =
-        if tui_app.active_tab == AppTab::Reader && tui_app.selected_reader_feed_id.is_none() {
-            ActivePane::Feeds
-        } else {
-            ActivePane::Items
-        };
+    tui_app.active_pane = if tui_app.active_tab == AppTab::Reader && tui_app.loaded_feed.is_none() {
+        ActivePane::Feeds
+    } else {
+        ActivePane::Items
+    };
     tui_app.set_status(format!("Showing {} items", view.label()));
     Ok(())
 }
 
+/// Sync the loaded feed with the highlighted feed cursor. Returns `true` when
+/// the cursor points at a real feed (so callers know whether moving focus to
+/// Items / Preview is meaningful), `false` when there are no feeds.
+fn load_items_for_highlighted_feed(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<bool> {
+    let Some(feed_id) = tui_app.selected_feed().map(|feed| feed.id) else {
+        clear_reader_feed_selection(tui_app, ctx)?;
+        return Ok(false);
+    };
+
+    if tui_app.loaded_feed_id() != Some(feed_id) {
+        load_items_for_feed(tui_app, ctx, feed_id)?;
+    }
+
+    Ok(true)
+}
+
 fn load_items_for_feed(tui_app: &mut TuiApp, ctx: &AppContext, feed_id: i64) -> Result<()> {
+    if let Some(index) = tui_app.feeds.iter().position(|feed| feed.id == feed_id) {
+        tui_app.feed_index = index;
+        tui_app.feed_list_state.select(Some(index));
+    }
+
     let items = ctx.store.get_items_by_feed(feed_id)?;
     let filter = tui_app.item_view.filter();
     let mut filtered = Vec::new();
@@ -477,9 +500,12 @@ fn load_items_for_feed(tui_app: &mut TuiApp, ctx: &AppContext, feed_id: i64) -> 
             filtered.push(item);
         }
     }
-    tui_app.items = filtered;
-    tui_app.item_index = 0;
-    finish_reader_items_load(tui_app, ctx)
+
+    // Constructing a fresh LoadedFeed makes the four pieces of correlated
+    // state (feed_id / items / item_index / item_list_state) atomic. There is
+    // no transient where they could disagree.
+    tui_app.loaded_feed = Some(LoadedFeed::new(feed_id, filtered));
+    reload_item_states(tui_app, ctx)
 }
 
 fn item_matches_filter(
@@ -505,7 +531,11 @@ fn item_matches_filter(
 }
 
 fn reload_item_states(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
-    let mut ids: Vec<String> = tui_app.items.iter().map(|item| item.id.clone()).collect();
+    let mut ids: Vec<String> = tui_app
+        .loaded_items()
+        .iter()
+        .map(|item| item.id.clone())
+        .collect();
     ids.extend(
         tui_app
             .latest_items
@@ -556,29 +586,79 @@ fn prev_pane_for_tab(tui_app: &TuiApp) -> ActivePane {
     }
 }
 
-fn handle_window_chord_key(tui_app: &mut TuiApp, key: &crossterm::event::KeyEvent) {
+fn focus_pane(tui_app: &mut TuiApp, ctx: &AppContext, target: ActivePane) -> Result<()> {
+    if tui_app.active_tab == AppTab::Reader && target != ActivePane::Feeds {
+        load_items_for_highlighted_feed(tui_app, ctx)?;
+    }
+    tui_app.active_pane = target;
+    Ok(())
+}
+
+fn focus_next_pane(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    let target = next_pane_for_tab(tui_app);
+    focus_pane(tui_app, ctx, target)
+}
+
+fn focus_prev_pane(tui_app: &mut TuiApp, ctx: &AppContext) -> Result<()> {
+    let target = prev_pane_for_tab(tui_app);
+    focus_pane(tui_app, ctx, target)
+}
+
+/// Move focus one pane in a direction. Syncs items for the highlighted feed
+/// first (so `focus_*_for_tab`'s `items_focusable = loaded_feed.is_some()`
+/// check is up-to-date — important when the user steps into the Items pane
+/// from Feeds without ever pressing Enter).
+///
+/// Returns `true` if focus actually moved, `false` if already at the edge.
+/// Shared by the `Ctrl+W h/l` chord arms and the `Left`/`Right` arrow keys.
+fn focus_pane_directional(
+    tui_app: &mut TuiApp,
+    ctx: &AppContext,
+    target_fn: fn(&TuiApp) -> ActivePane,
+) -> Result<bool> {
+    if tui_app.active_tab == AppTab::Reader {
+        load_items_for_highlighted_feed(tui_app, ctx)?;
+    }
+    let target = target_fn(tui_app);
+    if target == tui_app.active_pane {
+        Ok(false)
+    } else {
+        focus_pane(tui_app, ctx, target)?;
+        Ok(true)
+    }
+}
+
+fn handle_window_chord_key(
+    tui_app: &mut TuiApp,
+    ctx: &AppContext,
+    key: &crossterm::event::KeyEvent,
+) -> Result<()> {
     if tui_app.maximized {
         tui_app.set_status("Window chord unavailable in maximize mode".to_string());
-        return;
+        return Ok(());
     }
     match key.code {
         KeyCode::Char('h') | KeyCode::Left => {
-            let target = focus_left_for_tab(tui_app);
-            if target == tui_app.active_pane {
-                tui_app.set_status("Already at leftmost pane".to_string());
-            } else {
-                tui_app.active_pane = target;
+            if focus_pane_directional(tui_app, ctx, focus_left_for_tab)? {
                 tui_app.clear_status();
+            } else {
+                tui_app.set_status("Already at leftmost pane".to_string());
             }
         }
         KeyCode::Char('l') | KeyCode::Right => {
-            let target = focus_right_for_tab(tui_app);
-            if target == tui_app.active_pane {
-                tui_app.set_status("Already at rightmost pane".to_string());
-            } else {
-                tui_app.active_pane = target;
+            if focus_pane_directional(tui_app, ctx, focus_right_for_tab)? {
                 tui_app.clear_status();
+            } else {
+                tui_app.set_status("Already at rightmost pane".to_string());
             }
+        }
+        KeyCode::Char('w') | KeyCode::Tab => {
+            focus_next_pane(tui_app, ctx)?;
+            tui_app.clear_status();
+        }
+        KeyCode::Char('W') | KeyCode::BackTab => {
+            focus_prev_pane(tui_app, ctx)?;
+            tui_app.clear_status();
         }
         KeyCode::Esc => {
             tui_app.set_status("Window chord cancelled".to_string());
@@ -587,6 +667,7 @@ fn handle_window_chord_key(tui_app: &mut TuiApp, key: &crossterm::event::KeyEven
             tui_app.clear_status();
         }
     }
+    Ok(())
 }
 
 fn focus_left_for_tab(tui_app: &TuiApp) -> ActivePane {
@@ -597,7 +678,7 @@ fn focus_left_for_tab(tui_app: &TuiApp) -> ActivePane {
         },
         AppTab::Reader => {
             let feeds_focusable = tui_app.feed_panel == FeedPanelState::Expanded;
-            let items_focusable = tui_app.selected_reader_feed_id.is_some();
+            let items_focusable = tui_app.loaded_feed.is_some();
             match tui_app.active_pane {
                 ActivePane::Preview => {
                     if items_focusable {
@@ -628,7 +709,7 @@ fn focus_right_for_tab(tui_app: &TuiApp) -> ActivePane {
             other => other,
         },
         AppTab::Reader => {
-            let items_focusable = tui_app.selected_reader_feed_id.is_some();
+            let items_focusable = tui_app.loaded_feed.is_some();
             match tui_app.active_pane {
                 ActivePane::Feeds => {
                     if items_focusable {
@@ -654,4 +735,286 @@ fn update_item_state(
         .entry(item_id.clone())
         .or_insert_with(|| crate::domain::ItemState::new(item_id));
     update(state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyEvent, KeyModifiers};
+
+    fn add_feed_with_items(ctx: &AppContext, title: &str, item_count: usize) -> i64 {
+        let mut feed = crate::domain::Feed::new(format!("https://example.com/{title}.xml"));
+        feed.title = Some(title.to_string());
+        let feed_id = ctx.store.add_feed(&feed).unwrap();
+
+        for index in 0..item_count {
+            let mut item =
+                crate::domain::Item::new(feed_id, &feed.url, &format!("{title}-entry-{index}"));
+            item.title = Some(format!("{title} item {index}"));
+            ctx.store.add_item(&item).unwrap();
+        }
+
+        feed_id
+    }
+
+    fn reader_app_with_expanded_feeds(ctx: &AppContext) -> TuiApp {
+        let mut tui_app = TuiApp::new();
+        load_feeds(&mut tui_app, ctx).unwrap();
+        tui_app.active_tab = AppTab::Reader;
+        tui_app.feed_panel = FeedPanelState::Expanded;
+        tui_app.active_pane = ActivePane::Feeds;
+        tui_app
+    }
+
+    #[test]
+    fn window_chord_right_selects_highlighted_feed_before_focusing_items() {
+        let ctx = AppContext::in_memory().unwrap();
+        let feed_id = add_feed_with_items(&ctx, "alpha", 2);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+
+        assert_eq!(tui_app.loaded_feed_id(), None);
+        assert!(tui_app.loaded_items().is_empty());
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .unwrap();
+
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+        assert_eq!(tui_app.loaded_feed_id(), Some(feed_id));
+        assert_eq!(tui_app.loaded_items().len(), 2);
+        let loaded = tui_app.loaded_feed.as_ref().unwrap();
+        assert_eq!(loaded.feed_id, feed_id);
+        assert_eq!(loaded.item_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn window_chord_resyncs_items_when_feed_cursor_and_loaded_feed_drift() {
+        let ctx = AppContext::in_memory().unwrap();
+        let first_feed_id = add_feed_with_items(&ctx, "alpha", 1);
+        let second_feed_id = add_feed_with_items(&ctx, "beta", 3);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+
+        load_items_for_feed(&mut tui_app, &ctx, first_feed_id).unwrap();
+        let second_feed_index = tui_app
+            .feeds
+            .iter()
+            .position(|feed| feed.id == second_feed_id)
+            .unwrap();
+        tui_app.feed_index = second_feed_index;
+        tui_app.feed_list_state.select(Some(second_feed_index));
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .unwrap();
+
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+        assert_eq!(tui_app.loaded_feed_id(), Some(second_feed_id));
+        assert_eq!(tui_app.feed_index, second_feed_index);
+        assert_eq!(tui_app.loaded_items().len(), 3);
+        // Structurally, every item in `loaded_feed.items` belongs to
+        // `loaded_feed.feed_id` because they're constructed together by
+        // `LoadedFeed::new`.  This assertion is here as documentation; it
+        // cannot fail without a Box-sized refactor.
+        assert!(tui_app
+            .loaded_items()
+            .iter()
+            .all(|item| item.feed_id == second_feed_id));
+    }
+
+    #[test]
+    fn window_chord_directional_focus_steps_through_preview() {
+        let ctx = AppContext::in_memory().unwrap();
+        let feed_id = add_feed_with_items(&ctx, "alpha", 2);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+        assert_eq!(tui_app.loaded_feed_id(), Some(feed_id));
+        assert_eq!(tui_app.loaded_items().len(), 2);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Feeds);
+        assert_eq!(tui_app.loaded_feed_id(), Some(feed_id));
+        assert_eq!(tui_app.loaded_items().len(), 2);
+    }
+
+    #[test]
+    fn window_chord_cycle_focus_visits_all_reader_panes() {
+        let ctx = AppContext::in_memory().unwrap();
+        add_feed_with_items(&ctx, "alpha", 2);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Feeds);
+
+        handle_window_chord_key(
+            &mut tui_app,
+            &ctx,
+            &KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT),
+        )
+        .unwrap();
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+    }
+
+    /// Test for the bug: Enter on a feed must load its items and move focus
+    /// to the Items pane.
+    #[test]
+    fn select_advances_feeds_to_items_loading_when_needed() {
+        let ctx = AppContext::in_memory().unwrap();
+        let feed_id = add_feed_with_items(&ctx, "alpha", 3);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        assert_eq!(tui_app.loaded_feed_id(), None);
+
+        // Inline the dispatch arm body; the same code runs in run_app's
+        // Action::Select match.
+        if tui_app.active_tab == AppTab::Reader
+            && tui_app.active_pane == ActivePane::Feeds
+            && load_items_for_highlighted_feed(&mut tui_app, &ctx).unwrap()
+        {
+            tui_app.active_pane = ActivePane::Items;
+        }
+
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+        assert_eq!(tui_app.loaded_feed_id(), Some(feed_id));
+        assert_eq!(tui_app.loaded_items().len(), 3);
+    }
+
+    /// Test for the bug: Enter on an item in the Items pane must move focus
+    /// to the Preview pane (was previously a no-op — the workflow stalled).
+    #[test]
+    fn select_advances_items_to_preview() {
+        let ctx = AppContext::in_memory().unwrap();
+        let _ = add_feed_with_items(&ctx, "alpha", 2);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        load_items_for_highlighted_feed(&mut tui_app, &ctx).unwrap();
+        tui_app.active_pane = ActivePane::Items;
+        assert!(tui_app.selected_item().is_some());
+
+        // Inline the (_, Items) arm of Action::Select.
+        if tui_app.selected_item_for_active_tab().is_some() {
+            tui_app.active_pane = ActivePane::Preview;
+        }
+
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+    }
+
+    /// Entering the Reader tab via `]` (Action::ViewReader) must auto-load
+    /// the items for whichever feed is highlighted in the rail, so the Items
+    /// pane isn't empty on first entry.
+    #[test]
+    fn entering_reader_tab_loads_highlighted_feeds_items() {
+        let ctx = AppContext::in_memory().unwrap();
+        let first_feed = add_feed_with_items(&ctx, "alpha", 5);
+        let _second_feed = add_feed_with_items(&ctx, "beta", 2);
+
+        let mut tui_app = TuiApp::new();
+        load_feeds(&mut tui_app, &ctx).unwrap();
+        // Latest tab is the default in `TuiApp::new`, simulating fresh boot.
+        assert_eq!(tui_app.active_tab, AppTab::Latest);
+        assert_eq!(tui_app.loaded_feed_id(), None);
+
+        // Inline Action::ViewReader's body.
+        tui_app.active_tab = AppTab::Reader;
+        tui_app.feed_panel = FeedPanelState::Expanded;
+        tui_app.active_pane = ActivePane::Feeds;
+        load_items_for_highlighted_feed(&mut tui_app, &ctx).unwrap();
+
+        assert_eq!(tui_app.loaded_feed_id(), Some(first_feed));
+        assert_eq!(tui_app.loaded_items().len(), 5);
+    }
+
+    /// Right arrow walks Feeds → Items → Preview, loading the feed's items on
+    /// the very first step (so it doesn't skip Items just because nothing was
+    /// loaded yet). Left arrow then walks back.
+    #[test]
+    fn arrow_keys_walk_feeds_items_preview_and_back() {
+        let ctx = AppContext::in_memory().unwrap();
+        let feed_id = add_feed_with_items(&ctx, "alpha", 4);
+        let mut tui_app = reader_app_with_expanded_feeds(&ctx);
+        assert_eq!(tui_app.loaded_feed_id(), None);
+
+        // Right from Feeds → Items (loading on the way)
+        let moved = focus_pane_directional(&mut tui_app, &ctx, focus_right_for_tab).unwrap();
+        assert!(moved);
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+        assert_eq!(tui_app.loaded_feed_id(), Some(feed_id));
+        assert_eq!(tui_app.loaded_items().len(), 4);
+
+        // Right again → Preview
+        let moved = focus_pane_directional(&mut tui_app, &ctx, focus_right_for_tab).unwrap();
+        assert!(moved);
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+
+        // Right at the rightmost edge → no movement
+        let moved = focus_pane_directional(&mut tui_app, &ctx, focus_right_for_tab).unwrap();
+        assert!(!moved);
+        assert_eq!(tui_app.active_pane, ActivePane::Preview);
+
+        // Left walks back: Preview → Items → Feeds
+        let moved = focus_pane_directional(&mut tui_app, &ctx, focus_left_for_tab).unwrap();
+        assert!(moved);
+        assert_eq!(tui_app.active_pane, ActivePane::Items);
+
+        let moved = focus_pane_directional(&mut tui_app, &ctx, focus_left_for_tab).unwrap();
+        assert!(moved);
+        assert_eq!(tui_app.active_pane, ActivePane::Feeds);
+
+        // Left at the leftmost edge → no movement
+        let moved = focus_pane_directional(&mut tui_app, &ctx, focus_left_for_tab).unwrap();
+        assert!(!moved);
+        assert_eq!(tui_app.active_pane, ActivePane::Feeds);
+    }
 }

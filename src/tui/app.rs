@@ -81,17 +81,119 @@ impl ItemView {
 
 pub const PAGE_SIZE: usize = 10;
 
+/// All four pieces of state that describe "items for the loaded Reader feed are
+/// rendered." Bundling them makes the invariant structural: you cannot have an
+/// `items` Vec without a `feed_id`, and you cannot have an `item_index` /
+/// `item_list_state` referring to a different list than the one that's loaded.
+///
+/// Construct via [`LoadedFeed::new`]; mutate the cursor only through the
+/// methods on this type so `item_index` and `item_list_state` cannot drift.
+#[derive(Debug)]
+pub struct LoadedFeed {
+    pub feed_id: i64,
+    pub items: Vec<Item>,
+    pub item_index: usize,
+    pub item_list_state: ListState,
+}
+
+impl LoadedFeed {
+    pub fn new(feed_id: i64, items: Vec<Item>) -> Self {
+        let mut state = ListState::default();
+        if !items.is_empty() {
+            state.select(Some(0));
+        }
+        Self {
+            feed_id,
+            items,
+            item_index: 0,
+            item_list_state: state,
+        }
+    }
+
+    pub fn selected_item(&self) -> Option<&Item> {
+        self.items.get(self.item_index)
+    }
+
+    /// Set the highlighted item index, clamped to the items list. Returns
+    /// `true` if the cursor actually moved (callers use this to know whether
+    /// preview-scroll should reset).
+    pub fn select(&mut self, index: usize) -> bool {
+        if self.items.is_empty() {
+            self.item_index = 0;
+            self.item_list_state.select(None);
+            return false;
+        }
+        let bounded = index.min(self.items.len() - 1);
+        if bounded == self.item_index && self.item_list_state.selected() == Some(bounded) {
+            return false;
+        }
+        self.item_index = bounded;
+        self.item_list_state.select(Some(bounded));
+        true
+    }
+
+    pub fn move_up(&mut self) -> bool {
+        if self.item_index == 0 {
+            return false;
+        }
+        self.select(self.item_index - 1)
+    }
+
+    pub fn move_down(&mut self) -> bool {
+        if self.items.is_empty() || self.item_index + 1 >= self.items.len() {
+            return false;
+        }
+        self.select(self.item_index + 1)
+    }
+
+    pub fn move_top(&mut self) -> bool {
+        self.select(0)
+    }
+
+    pub fn move_bottom(&mut self) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        self.select(self.items.len() - 1)
+    }
+
+    pub fn next_page(&mut self) -> bool {
+        let max_index = self.items.len().saturating_sub(1);
+        self.select((self.item_index + PAGE_SIZE).min(max_index))
+    }
+
+    pub fn prev_page(&mut self) -> bool {
+        self.select(self.item_index.saturating_sub(PAGE_SIZE))
+    }
+
+    /// Re-clamp the cursor and `ListState` after `items` was replaced
+    /// externally (e.g. filtered by view change).
+    pub fn reclamp_cursor(&mut self) {
+        if self.items.is_empty() {
+            self.item_index = 0;
+            self.item_list_state.select(None);
+        } else {
+            if self.item_index >= self.items.len() {
+                self.item_index = self.items.len() - 1;
+            }
+            self.item_list_state.select(Some(self.item_index));
+        }
+    }
+}
+
 pub struct TuiApp {
     pub active_tab: AppTab,
     pub active_pane: ActivePane,
     pub feed_panel: FeedPanelState,
     pub feeds: Vec<Feed>,
-    pub items: Vec<Item>,
     pub latest_items: Vec<RecentItem>,
-    pub selected_reader_feed_id: Option<i64>,
+    /// `Some` iff a feed has been loaded into the Reader Items pane. The four
+    /// pieces of correlated state (feed_id / items / item_index /
+    /// item_list_state) live together inside `LoadedFeed` so they cannot
+    /// drift.
+    pub loaded_feed: Option<LoadedFeed>,
     pub item_states: std::collections::HashMap<String, ItemState>,
     pub feed_index: usize,
-    pub item_index: usize,
     pub latest_index: usize,
     pub item_view: ItemView,
     pub preview_scroll: u16,
@@ -103,7 +205,6 @@ pub struct TuiApp {
     pub maximized: bool,
     // List states for scrolling
     pub feed_list_state: ListState,
-    pub item_list_state: ListState,
     pub latest_list_state: ListState,
     pub latest_run_id: Option<i64>,
     pub recent_days: u32,
@@ -118,8 +219,6 @@ impl TuiApp {
     pub fn new() -> Self {
         let mut feed_list_state = ListState::default();
         feed_list_state.select(Some(0));
-        let mut item_list_state = ListState::default();
-        item_list_state.select(Some(0));
         let mut latest_list_state = ListState::default();
         latest_list_state.select(Some(0));
 
@@ -128,12 +227,10 @@ impl TuiApp {
             active_pane: ActivePane::Items,
             feed_panel: FeedPanelState::Collapsed,
             feeds: Vec::new(),
-            items: Vec::new(),
             latest_items: Vec::new(),
-            selected_reader_feed_id: None,
+            loaded_feed: None,
             item_states: std::collections::HashMap::new(),
             feed_index: 0,
-            item_index: 0,
             latest_index: 0,
             item_view: ItemView::All,
             preview_scroll: 0,
@@ -143,7 +240,6 @@ impl TuiApp {
             refresh_progress: (0, 0),
             maximized: false,
             feed_list_state,
-            item_list_state,
             latest_list_state,
             latest_run_id: None,
             recent_days: 7,
@@ -157,8 +253,28 @@ impl TuiApp {
         self.feeds.get(self.feed_index)
     }
 
+    pub fn loaded_feed_id(&self) -> Option<i64> {
+        self.loaded_feed.as_ref().map(|loaded| loaded.feed_id)
+    }
+
+    pub fn loaded_items(&self) -> &[Item] {
+        self.loaded_feed
+            .as_ref()
+            .map(|loaded| loaded.items.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn loaded_item_index(&self) -> usize {
+        self.loaded_feed
+            .as_ref()
+            .map(|loaded| loaded.item_index)
+            .unwrap_or(0)
+    }
+
     pub fn selected_item(&self) -> Option<&Item> {
-        self.items.get(self.item_index)
+        self.loaded_feed
+            .as_ref()
+            .and_then(|loaded| loaded.selected_item())
     }
 
     pub fn selected_latest_item(&self) -> Option<&Item> {
@@ -226,9 +342,12 @@ impl TuiApp {
                     }
                 }
                 AppTab::Reader => {
-                    if self.item_index > 0 {
-                        self.item_index -= 1;
-                        self.item_list_state.select(Some(self.item_index));
+                    if self
+                        .loaded_feed
+                        .as_mut()
+                        .map(|loaded| loaded.move_up())
+                        .unwrap_or(false)
+                    {
                         self.preview_scroll = 0;
                     }
                 }
@@ -260,9 +379,12 @@ impl TuiApp {
                     }
                 }
                 AppTab::Reader => {
-                    if !self.items.is_empty() && self.item_index < self.items.len() - 1 {
-                        self.item_index += 1;
-                        self.item_list_state.select(Some(self.item_index));
+                    if self
+                        .loaded_feed
+                        .as_mut()
+                        .map(|loaded| loaded.move_down())
+                        .unwrap_or(false)
+                    {
                         self.preview_scroll = 0;
                     }
                 }
@@ -286,9 +408,14 @@ impl TuiApp {
                     self.preview_scroll = 0;
                 }
                 AppTab::Reader => {
-                    self.item_index = 0;
-                    self.item_list_state.select(Some(0));
-                    self.preview_scroll = 0;
+                    if self
+                        .loaded_feed
+                        .as_mut()
+                        .map(|loaded| loaded.move_top())
+                        .unwrap_or(false)
+                    {
+                        self.preview_scroll = 0;
+                    }
                 }
             },
             ActivePane::Preview => {
@@ -310,9 +437,14 @@ impl TuiApp {
                     self.preview_scroll = 0;
                 }
                 AppTab::Reader => {
-                    self.item_index = self.items.len().saturating_sub(1);
-                    self.item_list_state.select(Some(self.item_index));
-                    self.preview_scroll = 0;
+                    if self
+                        .loaded_feed
+                        .as_mut()
+                        .map(|loaded| loaded.move_bottom())
+                        .unwrap_or(false)
+                    {
+                        self.preview_scroll = 0;
+                    }
                 }
             },
             ActivePane::Preview => {
@@ -342,11 +474,12 @@ impl TuiApp {
                     }
                 }
                 AppTab::Reader => {
-                    let max_index = self.items.len().saturating_sub(1);
-                    let new_index = (self.item_index + PAGE_SIZE).min(max_index);
-                    if new_index != self.item_index {
-                        self.item_index = new_index;
-                        self.item_list_state.select(Some(self.item_index));
+                    if self
+                        .loaded_feed
+                        .as_mut()
+                        .map(|loaded| loaded.next_page())
+                        .unwrap_or(false)
+                    {
                         self.preview_scroll = 0;
                     }
                 }
@@ -376,10 +509,12 @@ impl TuiApp {
                     }
                 }
                 AppTab::Reader => {
-                    let new_index = self.item_index.saturating_sub(PAGE_SIZE);
-                    if new_index != self.item_index {
-                        self.item_index = new_index;
-                        self.item_list_state.select(Some(self.item_index));
+                    if self
+                        .loaded_feed
+                        .as_mut()
+                        .map(|loaded| loaded.prev_page())
+                        .unwrap_or(false)
+                    {
                         self.preview_scroll = 0;
                     }
                 }
@@ -409,5 +544,70 @@ impl TuiApp {
 impl Default for TuiApp {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod loaded_feed_tests {
+    use super::*;
+
+    fn make_item(feed_id: i64, idx: usize) -> Item {
+        Item::new(
+            feed_id,
+            &format!("https://example.com/{feed_id}.xml"),
+            &format!("entry-{idx}"),
+        )
+    }
+
+    #[test]
+    fn new_with_items_selects_first_row() {
+        let loaded = LoadedFeed::new(7, vec![make_item(7, 0), make_item(7, 1)]);
+        assert_eq!(loaded.feed_id, 7);
+        assert_eq!(loaded.item_index, 0);
+        assert_eq!(loaded.item_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn new_empty_clears_list_state() {
+        let loaded = LoadedFeed::new(7, vec![]);
+        assert_eq!(loaded.item_index, 0);
+        assert_eq!(loaded.item_list_state.selected(), None);
+    }
+
+    #[test]
+    fn cursor_methods_keep_index_and_list_state_in_lockstep() {
+        let mut loaded = LoadedFeed::new(7, (0..5).map(|i| make_item(7, i)).collect());
+        assert!(loaded.move_down());
+        assert_eq!(loaded.item_index, 1);
+        assert_eq!(loaded.item_list_state.selected(), Some(1));
+
+        assert!(loaded.move_bottom());
+        assert_eq!(loaded.item_index, 4);
+        assert_eq!(loaded.item_list_state.selected(), Some(4));
+
+        // saturate at bottom
+        assert!(!loaded.move_down());
+        assert_eq!(loaded.item_index, 4);
+
+        assert!(loaded.move_top());
+        assert_eq!(loaded.item_index, 0);
+        assert_eq!(loaded.item_list_state.selected(), Some(0));
+
+        // saturate at top
+        assert!(!loaded.move_up());
+        assert_eq!(loaded.item_index, 0);
+    }
+
+    #[test]
+    fn reclamp_after_items_shrink_pulls_cursor_back() {
+        let mut loaded = LoadedFeed::new(7, (0..5).map(|i| make_item(7, i)).collect());
+        loaded.move_bottom();
+        // External truncation (e.g. filter view change re-using a LoadedFeed
+        // — though current code rebuilds LoadedFeed instead). reclamp_cursor
+        // is the safety net.
+        loaded.items.truncate(2);
+        loaded.reclamp_cursor();
+        assert_eq!(loaded.item_index, 1);
+        assert_eq!(loaded.item_list_state.selected(), Some(1));
     }
 }

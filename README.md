@@ -80,21 +80,25 @@ The TUI is keyboard-driven. Every binding below is configurable in `config.toml`
 | `p` / `PageUp` | Page up |
 | `Tab` | Cycle focus to the next pane (Feeds → Items → Preview) |
 | `Shift+Tab` | Cycle focus to the previous pane |
-| `Ctrl+W` then `h` / `←` | Focus the pane to the **left** (vim window chord) |
-| `Ctrl+W` then `l` / `→` | Focus the pane to the **right** |
+| `←` / `Left` / `h` | Focus pane to the **left** (loads the highlighted feed if needed) |
+| `→` / `Right` / `l` | Focus pane to the **right** (loads the highlighted feed if needed) |
+| `Ctrl+W` then `h` | Focus the pane to the **left** (vim window chord) |
+| `Ctrl+W` then `l` | Focus the pane to the **right** |
+| `Ctrl+W` then `w` / `Tab` | Cycle focus to the next pane |
+| `Ctrl+W` then `W` / `Shift+Tab` | Cycle focus to the previous pane |
 | `Ctrl+W` then `Esc` | Cancel a pending window chord |
 | `Alt+1` / `[` | Switch to the **Latest** tab |
 | `Alt+2` / `]` | Switch to the **Reader** tab (also opens the feed rail) |
 | `\` | Expand / collapse the feed rail in Reader |
 | `m` | Toggle maximize mode (fullscreen preview) |
 
-> The `Ctrl+W` chord works just like vim's window chord: press it, the status bar shows `-- WINDOW --`, then the next key picks a direction. It does **not** wrap — pressing `Ctrl+W h` while already on the leftmost pane stays put.
+> The `Ctrl+W` chord works like vim's window chord: press it, the status bar shows `-- WINDOW --`, then the next key picks a direction or cycles panes. Directional `h`/`l` does **not** wrap — pressing `Ctrl+W h` while already on the leftmost pane stays put.
 
 ### Reading actions
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Open the highlighted feed (Reader tab, Feeds pane) |
+| `Enter` | Feeds pane: open the highlighted feed (loads items, focuses Items). Items pane: focus the Preview pane. |
 | `r` | Toggle **read** / unread |
 | `s` | Toggle **star** |
 | `L` | Toggle **queued** (read-later) |
@@ -113,7 +117,7 @@ These re-filter the items pane (and the Latest tab) without leaving your selecti
 | `a` | All items (default) |
 | `u` | Unread only |
 | `f` | Starred |
-| `l` | Queued / read-later |
+| `Q` | Queued / read-later |
 | `v` | Saved |
 | `X` | Archived |
 

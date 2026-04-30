@@ -158,6 +158,9 @@ next_page = ["n", "PageDown"]
 prev_page = ["p", "PageUp"]
 next_pane = ["Tab"]
 prev_pane = ["BackTab", "Shift+Tab"]
+# Single-key directional focus. h/l are vim-style aliases for Left/Right.
+pane_left = ["Left", "h"]
+pane_right = ["Right", "l"]
 # vim-style window chord: press, then h (left) / l (right) / Esc (cancel)
 window_chord = ["Ctrl+w"]
 
@@ -171,7 +174,7 @@ toggle_archived = ["x"]
 view_all = ["a"]
 view_unread = ["u"]
 view_starred = ["f"]
-view_queued = ["l"]
+view_queued = ["Q"]
 view_saved = ["v"]
 view_archived = ["X"]
 view_latest = ["Alt+1", "["]

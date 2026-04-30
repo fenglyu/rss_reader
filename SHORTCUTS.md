@@ -12,8 +12,12 @@
 | `p` / `PageUp` | Jump up 10 items |
 | `Tab` | Switch to next pane (Feeds → Items → Preview) |
 | `Shift+Tab` | Switch to previous pane |
+| `←` / `Left` / `h` | Focus the pane on the left (loads the highlighted feed if needed) |
+| `→` / `Right` / `l` | Focus the pane on the right (loads the highlighted feed if needed) |
 | `Ctrl+W` then `h` | Focus the pane on the left (vim-style window chord) |
 | `Ctrl+W` then `l` | Focus the pane on the right |
+| `Ctrl+W` then `w` / `Tab` | Cycle focus to next pane |
+| `Ctrl+W` then `W` / `Shift+Tab` | Cycle focus to previous pane |
 | `Ctrl+W` then `Esc` | Cancel the pending window chord |
 | `Alt+1` / `[` | Switch to Latest tab |
 | `Alt+2` / `]` | Switch to Reader tab and open the feed rail |
@@ -22,7 +26,7 @@
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Select feed (load its items) |
+| `Enter` | In Feeds: load and open the highlighted feed; in Items: focus the Preview pane |
 | `r` | Toggle read/unread status |
 | `s` | Toggle star/unstar |
 | `L` | Toggle queued/read-later |
@@ -39,7 +43,7 @@
 | `a` | Show all items |
 | `u` | Show unread items |
 | `f` | Show starred items |
-| `l` | Show queued/read-later items |
+| `Q` | Show queued/read-later items |
 | `v` | Show saved items |
 | `X` | Show archived items |
 
